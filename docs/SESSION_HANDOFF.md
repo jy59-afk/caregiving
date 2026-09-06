@@ -4,7 +4,7 @@
 > chat history. Read this + [CLAUDE.md](../CLAUDE.md) and you have full context.
 > Update this file at the end of each working session.
 
-**Last updated:** 2026-09-06 · after build slice 8 (evaluation harness)
+**Last updated:** 2026-09-06 · after build slice 9 (polish) — **V1 build complete**
 
 ---
 
@@ -37,8 +37,9 @@ are in CLAUDE.md.
 ## Commits so far
 
 ```
-(uncommitted) Add the evaluation harness                          [build slice 8]
-HEAD     Add the Streamlit chat UI                                [build slice 7]
+(uncommitted) Polish — README, node trace, demo script            [build slice 9]
+HEAD     Add the evaluation harness                                [build slice 8]
+         Add the Streamlit chat UI                                [build slice 7]
          Wire the LangGraph graph behind hard guardrails          [build slice 6]
          Add the three orchestration nodes, tested in isolation   [build slice 5]
          Add provider-agnostic model access wrapper (src/llm.py)  [build slice 4]
@@ -316,14 +317,48 @@ LangGraph graph yet** (that is slice 6).
   `docs/EVALUATION.md` (all new), `CLAUDE.md`, this file. `git push origin main`
   yourself (blocked from the agent env).
 
+### 9. Polish ✅ — V1 build complete
+- **`src/graph.py`** — node-transition tracing now lives here, not in the UI:
+  - `_traced(name, fn)` wraps every node in `build_graph()`. One `-> name
+    (step N)` line on entry, one `<- name  NNN ms  wrote [keys]` on exit.
+  - The routing helpers log `route: intake -> output  (clarifying question)`
+    etc., and `run_output` logs `outcome: <x>`. So the whole run is legible
+    from the log alone, for **all four callers** (`run()`, `python
+    src/graph.py`, the eval harness, the Streamlit UI) — the worker node
+    modules stay logging-free.
+  - Logger is `logging.getLogger("respite.graph")`, left at WARNING by default
+    (pytest stays silent); `__main__` + `app.py` attach an INFO handler and
+    mute `httpx`/`huggingface_hub`/`faiss`/`sentence_transformers`.
+  - `__main__` now does `sys.stdout.reconfigure(encoding="utf-8")` — model
+    drafts contain `‑`/smart quotes that crashed the Windows cp1252 console.
+- **`src/app.py`** — `run_pipeline()` is now a 3-line bookend around
+  `graph.run(messages, consent_given=False)` (was a hand-rolled
+  `compiled.stream(...)` loop that duplicated LangGraph's merge + the per-node
+  logging that now lives in the graph). `new_state` import dropped. UI
+  behaviour unchanged.
+- **`README.md`** — rewritten for the finished build: flow diagram, full file
+  table, the 6-command Run block (`ingest` / `check_env` / `graph` /
+  `streamlit` / `evaluate` / `pytest`), a trace sample, the guardrail story as
+  three mechanisms, and a Status checklist that's all ticked.
+- **`docs/DEMO_SCRIPT.md`** (new) — ≤3-min video walkthrough: problem → happy
+  path (with the terminal trace on screen) → budget-forces-no-match → the
+  three guardrails → the eval table. Includes a "if a live run misbehaves"
+  note.
+- No comment-density gaps found — slices 1–8 held the standard.
+- `pytest -q` = **55 passed, 1 skipped**. Eval re-run (Groq): schema 100%,
+  tool 100%, task-completion 8/8, 0 fidelity issues, recall@3 0.80 —
+  `docs/EVALUATION.md` regenerated.
+- **Not committed yet:** `src/graph.py`, `src/app.py`, `README.md`,
+  `docs/DEMO_SCRIPT.md` (new), `docs/EVALUATION.md`, `CLAUDE.md`, this file.
+  `git push origin main` yourself (blocked from the agent env).
+
 ---
 
-## NEXT STEP — Build slice 9: polish
+## NEXT STEP — V1 is built. Optional follow-ups only
 
-1. README pass (quickstart, the `python src/evaluate.py` + `streamlit run`
-   commands, the guardrail story).
-2. Comment-density pass over any thin spots.
-3. Richer node-transition logging + a short demo-video script (the eval table
-   from `docs/EVALUATION.md` is the evaluation slide).
-4. Optional: `--judge` fidelity number for the slide; the `langchain-community`
-   migration (still not urgent).
+1. Record the demo video from `docs/DEMO_SCRIPT.md`; drop the eval table into
+   the evaluation slide.
+2. `--judge` fidelity number for the slide (`python src/evaluate.py --judge`).
+3. `langchain-community` migration (still not urgent — see the section above).
+4. Exercise the Bedrock path once AWS access is confirmed (Converse response
+   shape is written but unverified — slice 4 note).

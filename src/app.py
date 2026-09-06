@@ -16,58 +16,44 @@ FAISS index built via `python src/ingest.py` — the page guards for the latter)
 
 from __future__ import annotations
 
-import logging  # cheap node-transition logging so the demo video has something to show (full version is slice 9)
+import logging  # so the graph's node-transition trace (see graph._traced) surfaces in the launch terminal
 
 import streamlit as st  # the whole UI toolkit for this file
 
-import graph  # the compiled pipeline; imported as a module so we can both build + stream it here
+import graph  # the compiled pipeline; imported as a module so we call graph.run() and share its logger config
 from config import settings  # typed view of .env — backend name + index path for the pre-flight check
 from llm import LLMError  # provider/guardrail failures we want to show as a message, not a stack trace
-from state import new_state  # fresh state builder — mirrors what graph.run() does internally
 
 # --------------------------------------------------------------------------
-# Logging — one line per node entry. `streamlit run` surfaces stdout/stderr in
-# the terminal it was launched from, so this is enough for a screen-capture.
+# Logging — the graph emits one line per node (graph._traced); `streamlit run`
+# surfaces stdout/stderr in the terminal it was launched from, so configuring
+# the root logger here is enough for a screen-capture of the trace.
 # --------------------------------------------------------------------------
 logging.basicConfig(
-    level=logging.INFO,  # INFO is our node-transition channel
-    format="%(asctime)s  %(levelname)s  %(message)s",  # timestamped so transitions are legible on video
+    level=logging.INFO,  # INFO is our node-transition channel (graph._traced logs here)
+    format="%(asctime)s  %(levelname)s  %(name)s  %(message)s",  # timestamped + named so transitions are legible on video
 )
+for _noisy in ("httpx", "huggingface_hub", "faiss", "sentence_transformers"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)  # mute library chatter so the node trace stands out
 log = logging.getLogger("respite.app")  # named logger so it can be filtered from library noise
 
 
 # --------------------------------------------------------------------------
-# The one place this file touches the graph. Mirrors `graph.run()` but streams
-# node-by-node so we can log each transition, then returns the merged final
-# state exactly as `.invoke()` would have.
+# The one place this file touches the graph. A thin bookend around
+# `graph.run()`: the graph itself logs every node transition (graph._traced),
+# so this only adds a start/end line naming the turn and the backend.
 # --------------------------------------------------------------------------
 def run_pipeline(messages: list[dict[str, str]]) -> dict:
     """
-    Build a fresh state from the transcript, stream it through the compiled
-    graph, log every node as it fires, and return the final merged state
-    (carrying `outcome` and `final_response`).
+    Run the full transcript through the compiled graph and return the final
+    state (carrying `outcome` and `final_response`).
 
-    Streaming with `stream_mode="updates"` yields `{node_name: partial_update}`
-    after each node. `RespiteState` declares no reducers, so LangGraph's own
-    merge for it is a plain dict overwrite — which is exactly what
-    `final.update(delta)` reproduces here (each node returns the already-bumped
-    absolute `iteration_count`, not an increment, so overwrite is correct).
+    All matching, ranking and drafting — and the per-node trace — live in
+    `graph`. This wrapper exists only to frame each turn in the log.
     """
-    compiled = graph.build_graph()  # cheap; nodes do nothing until invoked/streamed
-
-    final: dict = dict(new_state(messages))  # start from every-key-present-and-empty, same as graph.run()
-    final["consent_given"] = False  # HITL flag starts closed; V1 has nothing that would flip it anyway
-
-    log.info("pipeline start — %d message(s), backend=%s", len(messages), settings.llm_backend)
-    for update in compiled.stream(final, stream_mode="updates"):  # one dict per node that ran
-        for node_name, delta in update.items():  # usually a single key, but loop to be safe
-            # Log the node and which state keys it touched — enough to trace the
-            # route taken (e.g. intake -> output means a clarifying question).
-            log.info("node %-14s -> %s", node_name, sorted((delta or {}).keys()))
-            if delta:  # a routed-past node can yield an empty update
-                final.update(delta)  # same overwrite semantics LangGraph uses for this state
-    log.info("pipeline end — outcome=%s", final.get("outcome"))
-
+    log.info("turn start — %d message(s), backend=%s", len(messages), settings.llm_backend)
+    final = graph.run(messages, consent_given=False)  # HITL flag stays closed; V1 has nothing that flips it
+    log.info("turn end — outcome=%s", final.get("outcome"))
     return final
 
 
