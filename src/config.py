@@ -24,8 +24,8 @@ class Settings(BaseModel):
     # --- LLM provider ---------------------------------------------------------
     llm_backend: str = Field(default="groq")            # "groq" for dev, "bedrock" for the demo build
     groq_api_key: str = Field(default="")               # required when llm_backend == "groq"
-    groq_extract_model: str = Field(default="llama-3.1-8b-instant")      # cheap model for intake extraction / classification
-    groq_reasoning_model: str = Field(default="llama-3.3-70b-versatile")  # stronger model for ranking rationale / message drafting
+    groq_extract_model: str = Field(default="openai/gpt-oss-20b")    # cheap/fast model for intake extraction / classification
+    groq_reasoning_model: str = Field(default="openai/gpt-oss-120b")  # stronger model for ranking rationale / message drafting
 
     # --- AWS Bedrock --------------------------------------------------------
     aws_region: str = Field(default="us-east-1")        # region for Bedrock Converse + Titan embeddings
@@ -49,8 +49,8 @@ def get_settings() -> Settings:
     return Settings(
         llm_backend=os.getenv("LLM_BACKEND", "groq"),                       # provider switch
         groq_api_key=os.getenv("GROQ_API_KEY", ""),                          # dev provider key
-        groq_extract_model=os.getenv("GROQ_EXTRACT_MODEL", "llama-3.1-8b-instant"),
-        groq_reasoning_model=os.getenv("GROQ_REASONING_MODEL", "llama-3.3-70b-versatile"),
+        groq_extract_model=os.getenv("GROQ_EXTRACT_MODEL", "openai/gpt-oss-20b"),
+        groq_reasoning_model=os.getenv("GROQ_REASONING_MODEL", "openai/gpt-oss-120b"),
         aws_region=os.getenv("AWS_REGION", "us-east-1"),
         bedrock_extract_model=os.getenv("BEDROCK_EXTRACT_MODEL", "anthropic.claude-haiku-4-5-20251001-v1:0"),
         bedrock_reasoning_model=os.getenv("BEDROCK_REASONING_MODEL", "anthropic.claude-sonnet-4-5-20250929-v1:0"),

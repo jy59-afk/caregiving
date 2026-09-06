@@ -73,7 +73,7 @@ density already in `src/ingest.py` / `src/retrieval_tool.py`.
 1. ✅ Scaffold repo
 2. ✅ Data layer — 13 curated SG respite services in `data/services.json` (see `data/README.md` for schema + provenance; figures are pre-subsidy approximations from public sources, re-verify before real use)
 3. ✅ Vector index & retrieval tool — `python src/ingest.py` builds `data/vector_index/`; `recall@3 = 0.80` on 10 labeled queries in `tests/test_retrieval.py` (raw MiniLM, no reranking)
-4. Model access wrapper — thin, Groq now / Bedrock later, with a smoke test
+4. ✅ Model access wrapper — `src/llm.py` (`complete()` / `generate()`, provider-agnostic, schema-validation guardrail baked in); `python src/check_env.py` smoke test passes against Groq; `tests/test_llm.py` covers the validation logic with a mocked provider
 
 ## Environment
 
