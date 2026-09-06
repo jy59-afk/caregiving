@@ -87,7 +87,7 @@ density already in `src/ingest.py` / `src/retrieval_tool.py`.
 `HuggingFaceEmbeddings` / `BedrockEmbeddings` in `src/ingest.py`. Migrate to
 `langchain-huggingface` and `langchain-aws` (FAISS wrapper has no standalone
 package yet). The deprecation warnings are filtered in `pytest.ini` meanwhile.
-5. Orchestration — Intake, Match & Rank, Explain & Draft nodes **each tested in isolation** before wiring the graph
+5. ✅ Orchestration nodes — `src/state.py` (state contract + output schemas), `src/intake.py`, `src/match_rank.py`, `src/explain_draft.py`; each unit-tested in isolation with `llm` mocked (`pytest -q` = 35 green). No graph yet.
 6. Guardrails — iteration cap, allow-list, schema validation; test that no send/book tool is reachable
 7. Interface — thinnest possible Streamlit chat
 8. Evaluation harness — 5–8 scripted scenarios; report schema-validation pass rate, tool-call success rate, task-completion rate, answer fidelity, and recall@3

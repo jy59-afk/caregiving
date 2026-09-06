@@ -4,7 +4,7 @@
 > chat history. Read this + [CLAUDE.md](../CLAUDE.md) and you have full context.
 > Update this file at the end of each working session.
 
-**Last updated:** 2026-09-06 · after build slice 4 (model access wrapper)
+**Last updated:** 2026-09-06 · after build slice 5 (orchestration nodes)
 
 ---
 
@@ -37,7 +37,8 @@ are in CLAUDE.md.
 ## Commits so far
 
 ```
-HEAD     Add provider-agnostic model access wrapper (src/llm.py)  [build slice 4]
+HEAD     Add the three orchestration nodes, tested in isolation   [build slice 5]
+         Add provider-agnostic model access wrapper (src/llm.py)  [build slice 4]
          Add docs/SESSION_HANDOFF.md for cross-session context    (amended — see security note above)
 019f1a0  Build vector index + validate hybrid retrieval (recall@3 = 0.80)
 06320ec  Add curated respite-service dataset (13 SG services)
@@ -120,6 +121,49 @@ as the 3-record schema example.
   against a real call when Bedrock creds land.
 - Run: `python src/check_env.py` · `pytest -q` (19 tests, all green)
 
+### 5. Orchestration nodes ✅
+The three worker nodes, **each written and unit-tested in isolation — no
+LangGraph graph yet** (that is slice 6).
+- `src/state.py` — the one place the state contract + every output schema
+  lives:
+  - `RespiteState` (`TypedDict, total=False`) — CLAUDE.md's keys verbatim:
+    `messages`, `caregiver_profile`, `candidate_matches`, `drafted_message`,
+    `consent_given`, `iteration_count`. `new_state(messages)` builds a fresh
+    one with every key present-and-empty; `render_transcript()` flattens
+    messages to a `Caregiver:/Assistant:` transcript (drops system + blank turns).
+  - Pydantic schemas, all with `Field(description=...)` written *for the model*
+    (llm.complete injects them as the JSON-schema contract): `CaregiverProfile`
+    (needs_description required; budget/area/schedule/relationship/
+    clarifying_question optional), `RankedMatch` + `RankedMatches`,
+    `DraftedMessage` (service_name/subject/body).
+- `src/intake.py` — `run_intake(state) -> {"caregiver_profile", "iteration_count"}`.
+  `llm.complete(model_role="extract", response_schema=CaregiverProfile)`.
+  Empty/blank transcript → returns an empty profile carrying a
+  `clarifying_question`, **without** calling the model. Schema failure
+  propagates (not swallowed).
+- `src/match_rank.py` — `run_match_and_rank(state) -> {"candidate_matches",
+  "iteration_count"}`. Stage 1: `retrieval_tool.search_services(profile.model_dump())`
+  (budget/area hard-filtered there, not by the model). Stage 2: LLM rerank
+  (`model_role="reasoning"`, `response_schema=RankedMatches`) reorders / drops
+  / writes the one-line "why". **`_reconcile()` guardrail:** model owns order +
+  `why` only; `name` must match a retrieved candidate (invented/dup names
+  dropped); `grounding_passage` + `similarity_score` are always copied from
+  retrieval. Empty retrieval → `[]`, model not called. Missing profile → `ValueError`.
+- `src/explain_draft.py` — `run_explain_and_draft(state) -> {"drafted_message",
+  "iteration_count"}`. Drafts an enquiry message for `candidate_matches[0]` only,
+  grounded in that match's passage (`model_role="reasoning"`,
+  `response_schema=DraftedMessage`). No matches → `drafted_message=None`, model
+  not called. **No send/book — returns draft text only.**
+- Every node bumps `iteration_count` even on its early-return path.
+- Tests: `tests/test_intake.py` (6), `tests/test_match_rank.py` (8),
+  `tests/test_explain_draft.py` (5) — all mock `llm.complete` (and, for match,
+  `match_rank.search_services`); no network. **`pytest -q` = 35 green.**
+- Verified end-to-end once against **real Groq + real FAISS index** (scratch
+  script, not committed): intake→match→draft on the Belinda-style prompt
+  produced a valid profile, a grounded match, and a sensible enquiry draft.
+  Note: the rerank legitimately returns <3 matches when only 1–2 candidates
+  genuinely fit.
+
 ## Known issues / decisions
 
 - **2 recall@3 misses** are queries framed around the caregiver's situation
@@ -138,42 +182,37 @@ as the 3-record schema example.
 
 ---
 
-## NEXT STEP — Build slice 5: orchestration nodes
+## NEXT STEP — Build slice 6: guardrails + wire the graph
 
-**Goal:** the three worker nodes of the LangGraph flow (Intake → Match & Rank
-→ Explain & Draft), **each written and tested in isolation** before any graph
-wiring. Resist building the graph in this slice.
+Slice 5 built the three nodes (`src/intake.py`, `src/match_rank.py`,
+`src/explain_draft.py`) and the state contract (`src/state.py`). Nothing wires
+them together yet — do that here, behind explicit guardrails.
 
-**State object** (define once, probably `src/state.py`): typed — `messages`,
-`caregiver_profile`, `candidate_matches`, `drafted_message`, `consent_given`,
-`iteration_count`. Pydantic model or `TypedDict`; keep heavy objects here, not
-in prompts.
+**Deliverables:**
+1. **Iteration cap** — a routing check that reads `state["iteration_count"]`
+   against `settings.max_iterations` (already in `config.py`, default 6) and
+   forces the graph to a terminal "Output" node when hit. Every node already
+   bumps `iteration_count`, including on early returns.
+2. **`allowed_tools` allow-list** — the agent may only ever reach
+   `search_services` + `draft_message`-equivalent (the Explain & Draft node).
+   Add a test that asserts no send/book/call tool is importable or registered.
+   (There is no such tool in the repo — the test guards against one being
+   added later.)
+3. **Schema validation** — already enforced inside `llm.complete`; slice 6 just
+   needs a test at the graph level that a node raising `LLMSchemaError` aborts
+   the run rather than emitting unvalidated text.
+4. **Wire the LangGraph graph** — `src/graph.py`: `Intake -> Match & Rank ->
+   Explain & Draft -> (HITL consent gate) -> Output`. The consent gate reads
+   `state["consent_given"]`; it does not auto-send anything (there is no sender).
+   Conditional edges: empty `candidate_matches` routes to a "loosen constraints"
+   Output branch; `clarifying_question` set on the profile routes back to ask
+   the caregiver.
 
-**Deliverables (one node at a time):**
-1. **Intake node** — takes the conversation so far, calls
-   `llm.complete(..., model_role="extract", response_schema=CaregiverProfile)`
-   to pull `needs_description`, `budget`, `area` (+ whatever else Match needs).
-   `CaregiverProfile` is the Pydantic schema — this is the first real user of
-   the `llm.py` guardrail. Test with 3–4 scripted transcripts.
-2. **Match & Rank node** — calls `retrieval_tool.search_services(profile)`
-   (already built), then optionally an LLM rerank pass
-   (`model_role="reasoning"`) to reorder / drop the ≤3 candidates and attach a
-   one-line "why". Output validated against a `RankedMatch` schema. Test that
-   budget/area hard filters are respected end-to-end.
-3. **Explain & Draft node** — for the top match, drafts the message the
-   caregiver would send to the service, grounded in the retrieved
-   `grounding_passage` (no invented facts). `model_role="reasoning"`, output
-   validated. **No send/book tool** — it only returns draft text.
-
-**Acceptance:** each node importable and unit-tested in isolation with a
-mocked or real `llm` call; `pytest -q` green; no LangGraph graph yet.
-
-**Then commit** in the established style and update this file.
+**Acceptance:** `pytest -q` green; graph runs end-to-end on a scripted
+transcript with `llm` mocked; iteration cap and allow-list each have a test.
 
 ## Build slices still after that
 
-6. Guardrails — iteration cap from `MAX_ITERATIONS`, `allowed_tools`
-   allow-list, test that no send/book tool is reachable. Then wire the graph.
 7. Streamlit chat UI (thin).
 8. Evaluation harness — 5–8 scripted scenarios + the metrics slide
    (schema-validation pass rate, tool-call success rate, task-completion
