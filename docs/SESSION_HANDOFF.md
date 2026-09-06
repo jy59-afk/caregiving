@@ -4,7 +4,7 @@
 > chat history. Read this + [CLAUDE.md](../CLAUDE.md) and you have full context.
 > Update this file at the end of each working session.
 
-**Last updated:** 2026-09-06 · after build slice 7 (thin Streamlit chat UI)
+**Last updated:** 2026-09-06 · after build slice 8 (evaluation harness)
 
 ---
 
@@ -37,8 +37,9 @@ are in CLAUDE.md.
 ## Commits so far
 
 ```
-(uncommitted) Add the Streamlit chat UI + intake token-limit fix   [build slice 7]
-HEAD     Wire the LangGraph graph behind hard guardrails          [build slice 6]
+(uncommitted) Add the evaluation harness                          [build slice 8]
+HEAD     Add the Streamlit chat UI                                [build slice 7]
+         Wire the LangGraph graph behind hard guardrails          [build slice 6]
          Add the three orchestration nodes, tested in isolation   [build slice 5]
          Add provider-agnostic model access wrapper (src/llm.py)  [build slice 4]
          Add docs/SESSION_HANDOFF.md for cross-session context    (amended — see security note above)
@@ -47,9 +48,9 @@ HEAD     Wire the LangGraph graph behind hard guardrails          [build slice 6
 fd78e05  Scaffold RespiteSG V1 project
 ```
 Run `git log --oneline -6` for exact hashes. A commit `2a38680` is in the OLD
-home-dir repo — ignore it. `origin/main` is still at `fd78e05`; everything
-above it is local and **unpushed** (push blocked from the agent environment —
-run `git push origin main` yourself).
+home-dir repo — ignore it. Slices 1–7 are committed **and pushed** to
+`origin/main` (`github.com/jy59-afk/caregiving`). Slice 8 is committed locally;
+push is blocked from the agent environment — run `git push origin main` yourself.
 
 ## Completed build slices
 
@@ -280,34 +281,49 @@ LangGraph graph yet** (that is slice 6).
   it grates in the demo, trim the draft out of `run_output`'s `final_response`
   in `src/graph.py` (slice 6 code) rather than string-munging in the UI.
 
+### 8. Evaluation harness ✅
+- `src/evaluate.py` — runs 8 scripted caregiver scenarios (`SCENARIOS`) through
+  `graph.run` and reports the evaluation-slide numbers:
+  - `_install_instrumentation()` monkeypatches `llm.complete` and
+    `match_rank.search_services` with counting shims; `_COUNTER` is zeroed per
+    scenario (in `run_scenario`) and summed for the headline rates.
+  - **schema-validation pass rate** = `(llm_calls - schema_failures) / llm_calls`
+    (a `LLMSchemaError` is tallied *and* re-raised — the run aborts, as designed).
+  - **tool-call success rate** = `(tool_calls - tool_failures) / tool_calls`.
+  - **task-completion rate** = scenarios where `outcome == expected_outcome`.
+  - **answer fidelity (proxy)** = `check_fidelity_proxy()`: every shown match has
+    a non-empty `why` + grounding passage, no draft body matches
+    `_BOOKING_LANGUAGE`. `--judge` adds `judge_fidelity()` — an LLM pass rating
+    each `why` SUPPORTED/UNSUPPORTED against its passage (uses `_REAL_GENERATE`
+    so it doesn't pollute `_COUNTER`). Full why/passage/draft text is dumped to
+    the report appendix for manual review.
+  - **recall@3** = `compute_recall_at_3()`, which imports `LABELED_QUERIES` from
+    `tests/test_retrieval.py` by file path (single source of truth) and calls
+    the *unwrapped* `retrieval_tool.search_services`.
+  - Writes a slide-ready markdown table to `docs/EVALUATION.md`; also prints it.
+  - The iteration-cap scenario carries `max_iterations=1`; `run_scenario`
+    swaps `settings.max_iterations` for that run and restores it in `finally`.
+  - Exit code: non-zero unless schema + tool rates are both 1.0 (task-completion
+    is expected to wobble with the model, so it doesn't fail the process).
+- `tests/test_eval.py` — calls `evaluate.run_suite()` and asserts: schema rate
+  == 1.0, tool rate == 1.0, task-completion >= 0.75, 0 fidelity issues,
+  recall@3 >= 0.70. **Double-gated** behind `RUN_EVAL=1` *and* a built index, so
+  `pytest -q` stays offline (55 passed, 1 skipped).
+- **Last real run (Groq, `openai/gpt-oss-{20b,120b}`):** schema 100% (16/16),
+  tool 100% (6/6), task-completion 8/8, 0 fidelity issues, recall@3 0.80. Run:
+  `python src/evaluate.py` · `RUN_EVAL=1 pytest tests/test_eval.py -v -s`.
+- **Not committed yet:** `src/evaluate.py`, `tests/test_eval.py`,
+  `docs/EVALUATION.md` (all new), `CLAUDE.md`, this file. `git push origin main`
+  yourself (blocked from the agent env).
+
 ---
 
-## NEXT STEP — Build slice 8: evaluation harness
+## NEXT STEP — Build slice 9: polish
 
-**Deliverables:**
-1. 5–8 scripted caregiver scenarios (dict of `messages` + expected `outcome`
-   + a note on what a good result looks like). Cover: a clean match, a
-   budget-forces-no-match, an area-forces-no-match, a vague→clarify, a
-   follow-up turn that resolves a clarify, and the iteration-cap path
-   (`MAX_ITERATIONS=1`).
-2. A runner (`tests/test_eval.py` or `src/evaluate.py`) that runs each scenario
-   through `graph.run` and reports the metrics slide numbers:
-   - **schema-validation pass rate** — did every `llm.complete` call validate
-     (count `LLMSchemaError`s).
-   - **tool-call success rate** — `search_services` returned without raising.
-   - **task-completion rate** — `outcome` matched the scenario's expected one.
-   - **answer fidelity** — cheap version: every `RankedMatch.why` /
-     `DraftedMessage.body` claim is traceable to the grounding passage (can be
-     a manual-review checklist for the demo, or an LLM-judge pass).
-   - **recall@3** — already in `tests/test_retrieval.py` (0.80); just surface it.
-3. Output a small table (markdown or printed) that can go straight onto the
-   evaluation slide.
-
-**Watch out:** the eval hits real Groq (costs tokens, ~1–3 calls/scenario) and
-needs the FAISS index built. Gate it behind a marker or an env flag so `pytest`
-stays offline by default, like `tests/test_retrieval.py` does.
-
-## Build slice still after that
-
-9. Polish — README, comment pass, richer node-transition logging + a short
-   demo-video script.
+1. README pass (quickstart, the `python src/evaluate.py` + `streamlit run`
+   commands, the guardrail story).
+2. Comment-density pass over any thin spots.
+3. Richer node-transition logging + a short demo-video script (the eval table
+   from `docs/EVALUATION.md` is the evaluation slide).
+4. Optional: `--judge` fidelity number for the slide; the `langchain-community`
+   migration (still not urgent).
