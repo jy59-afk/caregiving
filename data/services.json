@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Sunshine Corner Day Centre",
+    "care_type": "day-care",
+    "days": "Mon-Fri",
+    "hours": "9am-1pm",
+    "cost_per_session": 45,
+    "area": "Toa Payoh",
+    "distance_km": 2.1,
+    "description": "Memory-support day programme for seniors with early to moderate dementia. Small group size (max 12), staff trained in gentle redirection for confusion and wandering. Activities include music therapy, light exercise, and simple cognitive games. Caregivers report the calm, unhurried pace helps clients who get anxious in busier settings."
+  },
+  {
+    "name": "Golden Years Home Respite",
+    "care_type": "home-help",
+    "days": "Mon-Sat",
+    "hours": "flexible, 2-6 hour blocks",
+    "cost_per_session": 38,
+    "area": "Bishan",
+    "distance_km": 4.5,
+    "description": "In-home respite worker comes to the client's residence. Suited to seniors who resist leaving home or have mobility limits. Workers are trained in basic mobility assistance, medication reminders, and companionship. No dementia specialisation, best for general frailty or post-surgery recovery support rather than memory care."
+  },
+  {
+    "name": "Harmony Short-Stay Centre",
+    "care_type": "short-stay",
+    "days": "by arrangement, min 1 night",
+    "hours": "24-hour residential",
+    "cost_per_session": 120,
+    "area": "Ang Mo Kio",
+    "distance_km": 6.8,
+    "description": "Overnight and multi-day residential respite for caregivers needing an extended break (e.g. travel, medical procedure of their own). Nursing staff on site around the clock. Handles higher-acuity needs including incontinence care and fall risk. More expensive than day programmes but covers overnight gaps that day-care cannot."
+  }
+]

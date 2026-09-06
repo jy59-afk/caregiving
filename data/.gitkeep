@@ -1,0 +1,3 @@
+# Keeps the data/ directory in version control.
+# The curated dataset (services.json) and the built index (vector_index/) are
+# handled by .gitignore rules; this file just ensures the folder exists.

@@ -1,0 +1,26 @@
+# RespiteSG / Respite Navigator — V1 dependencies
+# Install:  python -m venv .venv && .venv\Scripts\activate  (Windows)
+#           pip install -r requirements.txt
+
+# --- Orchestration -----------------------------------------------------------
+langgraph>=0.2.28              # state-graph orchestrator (Intake -> Match -> Explain/Draft -> HITL -> Output)
+langchain>=0.3.0               # shared primitives used by langgraph + the community integrations below
+langchain-community>=0.3.0     # FAISS vector store + HuggingFace/Bedrock embedding wrappers
+
+# --- Retrieval (RAG layer) -------------------------------------------------
+faiss-cpu>=1.8.0               # in-process vector index, no infra
+sentence-transformers>=3.0.0   # local/free embedding model for dev (all-MiniLM-L6-v2)
+
+# --- Model access --------------------------------------------------------
+groq>=0.11.0                   # cheap/fast provider for dev iteration
+boto3>=1.35.0                  # AWS SDK — Bedrock Converse API + Titan embeddings for the demo build
+
+# --- Validation & config ----------------------------------------------
+pydantic>=2.7.0                # every model output is validated against a schema before use
+python-dotenv>=1.0.1           # loads .env for local dev
+
+# --- Interface -------------------------------------------------------
+streamlit>=1.37.0             # thin chat UI for the demo
+
+# --- Dev / test ----------------------------------------------------
+pytest>=8.2.0                  # unit tests + the recall@3 retrieval eval
