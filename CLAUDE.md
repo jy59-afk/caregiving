@@ -1,7 +1,8 @@
 # RespiteSG / Respite Navigator — project context for Claude Code
 
-Re-read this at the start of every session. Fuller detail lives in
-[docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) and
+Re-read this at the start of every session, then
+[docs/SESSION_HANDOFF.md](docs/SESSION_HANDOFF.md) for current state + the next
+step. Fuller detail lives in [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) and
 [docs/Respite_Navigator_Hackathon_Strategy.md](docs/Respite_Navigator_Hackathon_Strategy.md).
 
 ## What this is
