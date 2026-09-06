@@ -4,7 +4,7 @@
 > chat history. Read this + [CLAUDE.md](../CLAUDE.md) and you have full context.
 > Update this file at the end of each working session.
 
-**Last updated:** 2026-09-06 · after build slice 5 (orchestration nodes)
+**Last updated:** 2026-09-06 · after build slice 6 (guardrails + wired graph)
 
 ---
 
@@ -37,7 +37,8 @@ are in CLAUDE.md.
 ## Commits so far
 
 ```
-HEAD     Add the three orchestration nodes, tested in isolation   [build slice 5]
+HEAD     Wire the LangGraph graph behind hard guardrails          [build slice 6]
+         Add the three orchestration nodes, tested in isolation   [build slice 5]
          Add provider-agnostic model access wrapper (src/llm.py)  [build slice 4]
          Add docs/SESSION_HANDOFF.md for cross-session context    (amended — see security note above)
 019f1a0  Build vector index + validate hybrid retrieval (recall@3 = 0.80)
@@ -164,6 +165,44 @@ LangGraph graph yet** (that is slice 6).
   Note: the rerank legitimately returns <3 matches when only 1–2 candidates
   genuinely fit.
 
+### 6. Guardrails + wired graph ✅
+- `src/guardrails.py` — the three hard guardrails in one auditable module:
+  - `iteration_cap_reached(state)` — `state["iteration_count"] >=
+    settings.max_iterations` (live read, nothing baked in at import). This is
+    the routing check the graph consults after every worker node.
+  - `ALLOWED_TOOLS = frozenset({"search_services", "draft_message"})` — the
+    closed tool set. `assert_tool_allowed(name)` raises `GuardrailViolation`
+    on anything else.
+  - `scan_source_for_action_tools()` — static regex scan of `src/*.py` for a
+    top-level `def send_*/book_*/submit_*/call_*/...`. Returns `[]` today; the
+    test fails loudly if a real-world-action tool is ever added.
+  - Re-exports `LLMSchemaError` so the graph layer names the schema guardrail
+    by one symbol.
+- `src/graph.py` — `build_graph()` compiles the LangGraph state machine;
+  `run(messages, *, consent_given=False)` builds fresh state and invokes it.
+  Topology: `Intake → Match & Rank → Explain & Draft → Consent gate → Output
+  → END`, with conditional edges:
+  - after Intake: cap tripped **or** `profile.clarifying_question` set → Output.
+  - after Match & Rank: cap tripped **or** empty `candidate_matches` → Output.
+  - `explain_draft → consent_gate → output` is unconditional.
+  - `run_consent_gate` is the HITL seam — **no sender exists**, so it only
+    coerces `consent_given` to bool and performs no side effect.
+  - `run_output` picks one of four `outcome`s and writes `final_response`
+    (the caregiver-facing text): `matches_ready` / `no_matches` /
+    `needs_clarification` / `stopped_iteration_cap`.
+- `src/state.py` gained two **Output-only** keys: `outcome` (Literal) and
+  `final_response` (str), plus the `Outcome` type alias. Worker nodes never
+  touch them.
+- Tests: `tests/test_guardrails.py` (9) + `tests/test_graph.py` (7) — model
+  and `search_services` mocked, no network / no FAISS index. Cover: cap
+  boundary, allow-list, source scan (+ a planted-sender sanity check), the
+  happy path through all nodes, both short-circuit branches, the cap forcing
+  early Output, and `LLMSchemaError` aborting the whole run. **`pytest -q` =
+  55 green.**
+- Not yet exercised end-to-end against real Groq + real index (slice 5's
+  scratch script predates the graph). Worth one manual `python src/graph.py`
+  run once the index is built.
+
 ## Known issues / decisions
 
 - **2 recall@3 misses** are queries framed around the caregiver's situation
@@ -182,38 +221,33 @@ LangGraph graph yet** (that is slice 6).
 
 ---
 
-## NEXT STEP — Build slice 6: guardrails + wire the graph
+## NEXT STEP — Build slice 7: thin Streamlit chat UI
 
-Slice 5 built the three nodes (`src/intake.py`, `src/match_rank.py`,
-`src/explain_draft.py`) and the state contract (`src/state.py`). Nothing wires
-them together yet — do that here, behind explicit guardrails.
+The graph (`src/graph.py`) is done and green. Slice 7 is the thinnest possible
+chat front-end over it — explicitly **not** the graded component, so keep it
+minimal.
 
 **Deliverables:**
-1. **Iteration cap** — a routing check that reads `state["iteration_count"]`
-   against `settings.max_iterations` (already in `config.py`, default 6) and
-   forces the graph to a terminal "Output" node when hit. Every node already
-   bumps `iteration_count`, including on early returns.
-2. **`allowed_tools` allow-list** — the agent may only ever reach
-   `search_services` + `draft_message`-equivalent (the Explain & Draft node).
-   Add a test that asserts no send/book/call tool is importable or registered.
-   (There is no such tool in the repo — the test guards against one being
-   added later.)
-3. **Schema validation** — already enforced inside `llm.complete`; slice 6 just
-   needs a test at the graph level that a node raising `LLMSchemaError` aborts
-   the run rather than emitting unvalidated text.
-4. **Wire the LangGraph graph** — `src/graph.py`: `Intake -> Match & Rank ->
-   Explain & Draft -> (HITL consent gate) -> Output`. The consent gate reads
-   `state["consent_given"]`; it does not auto-send anything (there is no sender).
-   Conditional edges: empty `candidate_matches` routes to a "loosen constraints"
-   Output branch; `clarifying_question` set on the profile routes back to ask
-   the caregiver.
+1. `src/app.py` (or `streamlit_app.py`) — a single chat page: text input,
+   message history, and on each user turn call `graph.run(messages)` and render
+   `final_response`. Show `outcome` somewhere unobtrusive (caption / sidebar).
+2. When `outcome == "matches_ready"`, also surface the `candidate_matches`
+   (name + why + a peek at the grounding passage) and the `drafted_message`
+   (subject + body) in a copy-friendly block — the caregiver sends it, the app
+   never does.
+3. When `outcome == "needs_clarification"`, the `final_response` *is* the
+   question — just show it and let them answer in the same input.
+4. Backend is picked by `.env` (`LLM_BACKEND=groq` for dev). The index must be
+   built (`python src/ingest.py`) or Match & Rank raises on load — catch that
+   and show a friendly "run ingest first" message rather than a stack trace.
+5. Node-transition logging can wait for slice 9, but if it's cheap, log each
+   node entry now so the demo video has something to show.
 
-**Acceptance:** `pytest -q` green; graph runs end-to-end on a scripted
-transcript with `llm` mocked; iteration cap and allow-list each have a test.
+**Acceptance:** `streamlit run src/app.py`, type the Belinda prompt, get a
+ranked list + a draft; type a vague prompt, get the clarifying question back.
 
 ## Build slices still after that
 
-7. Streamlit chat UI (thin).
 8. Evaluation harness — 5–8 scripted scenarios + the metrics slide
    (schema-validation pass rate, tool-call success rate, task-completion
    rate, answer fidelity, recall@3).

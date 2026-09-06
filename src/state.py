@@ -17,7 +17,7 @@ is cheap to import from tests.
 
 from __future__ import annotations  # allow `str | None` style hints everywhere
 
-from typing import TypedDict  # LangGraph merges partial-dict updates into a TypedDict cleanly
+from typing import Literal, TypedDict  # LangGraph merges partial-dict updates into a TypedDict cleanly
 
 from pydantic import BaseModel, Field  # schema container + per-field metadata used in prompts
 
@@ -167,6 +167,11 @@ class RespiteState(TypedDict, total=False):
                           approved showing/using it. Nothing auto-sends regardless.
       iteration_count   — incremented by each node; the guardrail slice caps it
                           at settings.max_iterations.
+
+    Terminal-output keys (written only by the Output node in `src/graph.py` —
+    they are the graph's result surface, not something the worker nodes touch):
+      outcome           — which terminal branch the run ended on.
+      final_response    — the plain-text message the UI shows the caregiver.
     """
 
     messages: list[dict[str, str]]
@@ -175,6 +180,18 @@ class RespiteState(TypedDict, total=False):
     drafted_message: DraftedMessage | None
     consent_given: bool
     iteration_count: int
+    outcome: Outcome | None
+    final_response: str | None
+
+
+# The four ways a graph run can terminate. `matches_ready` is the success path;
+# the other three are all legitimate, non-error endings the UI renders differently.
+Outcome = Literal[
+    "matches_ready",         # >=1 grounded match + a draft the caregiver can review
+    "no_matches",            # retrieval + rerank found nothing that fits — suggest loosening constraints
+    "needs_clarification",   # Intake couldn't proceed without asking the caregiver something
+    "stopped_iteration_cap",  # the hard iteration cap tripped before a result was ready
+]
 
 
 def new_state(messages: list[dict[str, str]] | None = None) -> RespiteState:
@@ -189,6 +206,8 @@ def new_state(messages: list[dict[str, str]] | None = None) -> RespiteState:
         drafted_message=None,            # set by the Explain & Draft node
         consent_given=False,             # HITL gate starts closed
         iteration_count=0,               # bumped by each node that runs
+        outcome=None,                    # set once, by the Output node
+        final_response=None,             # set once, by the Output node
     )
 
 

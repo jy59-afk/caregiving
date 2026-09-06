@@ -88,7 +88,7 @@ density already in `src/ingest.py` / `src/retrieval_tool.py`.
 `langchain-huggingface` and `langchain-aws` (FAISS wrapper has no standalone
 package yet). The deprecation warnings are filtered in `pytest.ini` meanwhile.
 5. ✅ Orchestration nodes — `src/state.py` (state contract + output schemas), `src/intake.py`, `src/match_rank.py`, `src/explain_draft.py`; each unit-tested in isolation with `llm` mocked (`pytest -q` = 35 green). No graph yet.
-6. Guardrails — iteration cap, allow-list, schema validation; test that no send/book tool is reachable
+6. ✅ Guardrails + graph — `src/guardrails.py` (iteration cap `iteration_cap_reached()`, closed `ALLOWED_TOOLS` allow-list, `scan_source_for_action_tools()` static check) and `src/graph.py` (LangGraph wiring: Intake → Match & Rank → Explain & Draft → Consent gate → Output, with cap + clarifying-question + empty-shortlist branches). `tests/test_guardrails.py` + `tests/test_graph.py`; `pytest -q` = 55 green. State gained two Output-only keys: `outcome`, `final_response`.
 7. Interface — thinnest possible Streamlit chat
 8. Evaluation harness — 5–8 scripted scenarios; report schema-validation pass rate, tool-call success rate, task-completion rate, answer fidelity, and recall@3
 9. Polish — README, comments pass, node-transition logging for the demo video
