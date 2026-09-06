@@ -89,11 +89,14 @@ def search_services(profile: dict, k: int = 8) -> list[dict]:
 
 
 if __name__ == "__main__":
-    # Quick manual smoke test — run after ingest.py has built the index.
+    # Quick manual smoke test — run after `python src/ingest.py` has built the index.
     example_profile = {
-        "needs_description": "my dad gets confused sometimes and needs someone patient with him during the day",
-        "budget": 50,
-        "area": "Toa Payoh",
+        "needs_description": "my dad gets confused and repeats himself, needs someone patient with him during the day while I work",
+        "budget": 90,        # rules out the ~S$120/day nursing-home respite, keeps the day centres
+        "area": "Toa Payoh",  # substring-matched against each service's area
     }
-    for match in search_services(example_profile):
-        print(match["name"], "-", round(match["similarity_score"], 3))  # print each match with its similarity score for a manual sanity check
+    matches = search_services(example_profile)  # hybrid: semantic retrieve, then hard-filter on budget + area
+    if not matches:
+        print("No services matched — loosen the budget or area, or run `python src/ingest.py` first.")
+    for match in matches:
+        print(match["name"], "-", round(match["similarity_score"], 3))  # lower score = closer semantic match

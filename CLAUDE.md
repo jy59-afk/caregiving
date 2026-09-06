@@ -71,8 +71,21 @@ density already in `src/ingest.py` / `src/retrieval_tool.py`.
 
 1. ✅ Scaffold repo
 2. ✅ Data layer — 13 curated SG respite services in `data/services.json` (see `data/README.md` for schema + provenance; figures are pre-subsidy approximations from public sources, re-verify before real use)
-3. Vector index & retrieval tool — build index, get `recall@3` passing on labeled queries (10 labeled cases already in `tests/test_retrieval.py`)
+3. ✅ Vector index & retrieval tool — `python src/ingest.py` builds `data/vector_index/`; `recall@3 = 0.80` on 10 labeled queries in `tests/test_retrieval.py` (raw MiniLM, no reranking)
 4. Model access wrapper — thin, Groq now / Bedrock later, with a smoke test
+
+## Environment
+
+- **Python 3.12** venv at `.venv/` (torch/faiss have no 3.13+ wheels). Deps installed and working.
+- Tested versions frozen in `requirements-lock.txt`; ranges in `requirements.txt`.
+
+## langchain-community migration (cleanup, not urgent)
+
+`langchain-community` is being sunset. Two imports still use it:
+`langchain_community.vectorstores.FAISS` and (via the deprecated path)
+`HuggingFaceEmbeddings` / `BedrockEmbeddings` in `src/ingest.py`. Migrate to
+`langchain-huggingface` and `langchain-aws` (FAISS wrapper has no standalone
+package yet). The deprecation warnings are filtered in `pytest.ini` meanwhile.
 5. Orchestration — Intake, Match & Rank, Explain & Draft nodes **each tested in isolation** before wiring the graph
 6. Guardrails — iteration cap, allow-list, schema validation; test that no send/book tool is reachable
 7. Interface — thinnest possible Streamlit chat

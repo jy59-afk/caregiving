@@ -33,13 +33,13 @@ and evidence.
 
 ## Setup
 
-Requires Python 3.11+.
+Requires **Python 3.12** (`torch` / `faiss-cpu` have no 3.13+ wheels yet).
 
 ```bash
-python -m venv .venv
+py -3.12 -m venv .venv
 .venv\Scripts\activate            # Windows (PowerShell/CMD)
 # source .venv/bin/activate       # macOS / Linux
-pip install -r requirements.txt
+pip install -r requirements.txt   # or: pip install -r requirements-lock.txt (exact tested freeze)
 copy .env.example .env            # Windows  (cp on macOS/Linux)
 ```
 
@@ -53,10 +53,16 @@ Then fill in `.env`:
 ## Run
 
 ```bash
-python src/ingest.py             # build data/vector_index/ from data/services.json
+python src/ingest.py             # build data/vector_index/ from data/services.json (downloads the MiniLM model on first run)
 python src/retrieval_tool.py     # smoke test: prints top matches for an example profile
-pytest -v                        # unit tests; recall@3 runs once the index exists
+pytest -q                        # unit tests + recall@3 (skips until the index exists)
 ```
+
+Current retrieval baseline: **recall@3 = 0.80** (8/10 labeled queries) with raw
+MiniLM cosine similarity and no reranking. The two misses are queries phrased
+around the *caregiver's* situation rather than the care need ("I have to fly
+overseas…"); the Match & Rank node's LLM reranking and Bedrock Titan
+embeddings are expected to close that gap.
 
 ## Guardrails (responsible-AI design)
 
@@ -69,7 +75,7 @@ pytest -v                        # unit tests; recall@3 runs once the index exis
 
 - [x] Repo scaffold, config, retrieval starter
 - [x] Curated dataset — 13 SG respite services ([data/README.md](data/README.md))
-- [ ] Vector index passing `recall@3` on labeled queries
+- [x] Vector index + hybrid retrieval — `recall@3 = 0.80` on 10 labeled queries
 - [ ] Model access wrapper (Groq → Bedrock) + smoke test
 - [ ] LangGraph nodes: Intake, Match & Rank, Explain & Draft
 - [ ] Guardrails + tests
