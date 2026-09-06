@@ -4,7 +4,7 @@
 > chat history. Read this + [CLAUDE.md](../CLAUDE.md) and you have full context.
 > Update this file at the end of each working session.
 
-**Last updated:** 2026-09-06 · after build slice 6 (guardrails + wired graph)
+**Last updated:** 2026-09-06 · after build slice 7 (thin Streamlit chat UI)
 
 ---
 
@@ -37,6 +37,7 @@ are in CLAUDE.md.
 ## Commits so far
 
 ```
+(uncommitted) Add the Streamlit chat UI + intake token-limit fix   [build slice 7]
 HEAD     Wire the LangGraph graph behind hard guardrails          [build slice 6]
          Add the three orchestration nodes, tested in isolation   [build slice 5]
          Add provider-agnostic model access wrapper (src/llm.py)  [build slice 4]
@@ -219,36 +220,94 @@ LangGraph graph yet** (that is slice 6).
   note). Bedrock stays Haiku 4.5 (extract) / Sonnet 4.5 (reasoning); ids in
   `.env.example` / `config.py`.
 
+### 7. Thin Streamlit chat UI ✅
+- `src/app.py` — one chat page over `graph`. Not the graded component; owns no
+  matching logic, prompts, or schema.
+  - `run_pipeline(messages)` mirrors `graph.run()` but uses
+    `compiled.stream(..., stream_mode="updates")` so every node logs one line
+    (`node intake -> ['caregiver_profile', 'iteration_count']`) — cheap
+    node-transition logging for the demo video, per slice 9's ask. Merges the
+    per-node deltas back with plain `dict.update` (RespiteState has no
+    reducers, so that matches LangGraph's own merge).
+  - Pre-flight: `index_is_built()` checks `settings.index_path/index.faiss`;
+    missing → friendly "run `python src/ingest.py`" `st.error` + `st.stop()`,
+    no traceback.
+  - Every user turn calls `run_pipeline(full transcript)` — the graph is
+    stateless between calls, so a follow-up answer to a clarifying question is
+    just re-extracted with more context.
+  - `outcome == "matches_ready"` → assistant bubble (the Output node's
+    `final_response`, which already includes the draft inline) **plus**
+    structured blocks: "Options that fit" (name + grounded `why` + an expander
+    with the grounding passage) and "Draft enquiry to …" (Subject + Message in
+    editable `st.text_area`s — the copy surface; **no send button, by design**).
+  - `outcome == "needs_clarification"` → the `final_response` *is* the question;
+    just shown in the bubble, answered in the same input.
+  - `LLMError` (backend down, or a schema guardrail firing) is caught: the user
+    turn is popped so history stays clean and an `st.error` invites a retry.
+  - `md_safe()` escapes `$` before every `st.markdown` — a drafted "S$85 per
+    session" was rendering as garbled LaTeX otherwise.
+  - Sidebar: backend name, `max_iterations`, last `outcome`, "Start over".
+- `.claude/launch.json` — `respite-ui` config so the preview tooling / `/run`
+  can start `streamlit run src/app.py` on port 8501.
+- **Slice-7 fix (committed with this slice):** `src/intake.py` `max_tokens`
+  512 → 1536. gpt-oss-20b spends hidden reasoning tokens before the JSON;
+  terse input ("I need a break") ironically needs *more* headroom and was
+  hitting a Groq 400 `json_validate_failed`. Verified: 512 fails, 1024+ passes.
+  All 55 tests still green (no test asserted on the old value).
+- **Not committed:** run `git add -A && git commit` yourself (push is blocked
+  from the agent env). Files: `src/app.py` (new), `.claude/launch.json` (new),
+  `src/intake.py` (edit), `src/graph.py` (demo-prompt edit — see below),
+  `CLAUDE.md`, this file.
+- Verified end-to-end against **real Groq + real FAISS index**: `matches_ready`
+  (Toa Payoh dementia prompt → New Horizon Centre + a grounded draft, `$`
+  rendering clean), `needs_clarification` (vague prompt → "Could you tell me
+  who you are caring for?"), and node logging all confirmed in the browser.
+
+## Known issues / decisions  (slice 7 additions)
+
+- **The old graph.py demo prompt returned `no_matches`.** It asked for weekday
+  daytime cover *in Bishan* under $40 — but Bishan has exactly one record
+  (St Luke's **weekend** respite, $19), so retrieval → rerank correctly emptied
+  the shortlist. That is right behaviour, wrong demo. `src/graph.py.__main__`
+  now uses "near Toa Payoh … above $85", which lands on the dementia day-care
+  records. **If the pitch persona (Belinda) is tied to a specific town, either
+  add a weekday day-care record for it to `data/services.json` or set the demo
+  script in that town's actual coverage.** Do not widen the hard filters to
+  paper over this — budget/area being real filters is the point.
+- The `matches_ready` view shows the draft twice (inline in the assistant
+  bubble via `final_response`, then again in the editable Subject/Message
+  boxes). Left as-is: the bubble is the narrative, the boxes are the tool. If
+  it grates in the demo, trim the draft out of `run_output`'s `final_response`
+  in `src/graph.py` (slice 6 code) rather than string-munging in the UI.
+
 ---
 
-## NEXT STEP — Build slice 7: thin Streamlit chat UI
-
-The graph (`src/graph.py`) is done and green. Slice 7 is the thinnest possible
-chat front-end over it — explicitly **not** the graded component, so keep it
-minimal.
+## NEXT STEP — Build slice 8: evaluation harness
 
 **Deliverables:**
-1. `src/app.py` (or `streamlit_app.py`) — a single chat page: text input,
-   message history, and on each user turn call `graph.run(messages)` and render
-   `final_response`. Show `outcome` somewhere unobtrusive (caption / sidebar).
-2. When `outcome == "matches_ready"`, also surface the `candidate_matches`
-   (name + why + a peek at the grounding passage) and the `drafted_message`
-   (subject + body) in a copy-friendly block — the caregiver sends it, the app
-   never does.
-3. When `outcome == "needs_clarification"`, the `final_response` *is* the
-   question — just show it and let them answer in the same input.
-4. Backend is picked by `.env` (`LLM_BACKEND=groq` for dev). The index must be
-   built (`python src/ingest.py`) or Match & Rank raises on load — catch that
-   and show a friendly "run ingest first" message rather than a stack trace.
-5. Node-transition logging can wait for slice 9, but if it's cheap, log each
-   node entry now so the demo video has something to show.
+1. 5–8 scripted caregiver scenarios (dict of `messages` + expected `outcome`
+   + a note on what a good result looks like). Cover: a clean match, a
+   budget-forces-no-match, an area-forces-no-match, a vague→clarify, a
+   follow-up turn that resolves a clarify, and the iteration-cap path
+   (`MAX_ITERATIONS=1`).
+2. A runner (`tests/test_eval.py` or `src/evaluate.py`) that runs each scenario
+   through `graph.run` and reports the metrics slide numbers:
+   - **schema-validation pass rate** — did every `llm.complete` call validate
+     (count `LLMSchemaError`s).
+   - **tool-call success rate** — `search_services` returned without raising.
+   - **task-completion rate** — `outcome` matched the scenario's expected one.
+   - **answer fidelity** — cheap version: every `RankedMatch.why` /
+     `DraftedMessage.body` claim is traceable to the grounding passage (can be
+     a manual-review checklist for the demo, or an LLM-judge pass).
+   - **recall@3** — already in `tests/test_retrieval.py` (0.80); just surface it.
+3. Output a small table (markdown or printed) that can go straight onto the
+   evaluation slide.
 
-**Acceptance:** `streamlit run src/app.py`, type the Belinda prompt, get a
-ranked list + a draft; type a vague prompt, get the clarifying question back.
+**Watch out:** the eval hits real Groq (costs tokens, ~1–3 calls/scenario) and
+needs the FAISS index built. Gate it behind a marker or an env flag so `pytest`
+stays offline by default, like `tests/test_retrieval.py` does.
 
-## Build slices still after that
+## Build slice still after that
 
-8. Evaluation harness — 5–8 scripted scenarios + the metrics slide
-   (schema-validation pass rate, tool-call success rate, task-completion
-   rate, answer fidelity, recall@3).
-9. Polish — README, comment pass, node-transition logging for the demo video.
+9. Polish — README, comment pass, richer node-transition logging + a short
+   demo-video script.

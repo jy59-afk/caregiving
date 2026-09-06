@@ -207,11 +207,14 @@ if __name__ == "__main__":
             "role": "user",
             "content": (
                 "My mother has Alzheimer's and gets agitated in the afternoons. "
-                "I lecture part-time and need weekday daytime cover in Bishan. "
-                "I can't really go above $40 a session."
+                "I lecture part-time and need weekday daytime cover near Toa Payoh. "
+                "I can't really go above $85 a session."
             ),
         }
     ]
+    # Note: Toa Payoh + ~$85 lands on the dementia day-care records. Narrowing
+    # this to an area/budget with no genuine fit (e.g. weekday cover in Bishan,
+    # which only has weekend respite) correctly returns outcome="no_matches".
     final = run(demo_messages)  # Intake -> Match & Rank -> Explain & Draft -> Output
     print(f"outcome: {final.get('outcome')}\n")  # which branch we ended on
     print(final.get("final_response"))  # what the caregiver would see

@@ -69,7 +69,10 @@ def run_intake(state: RespiteState) -> dict:
         ],
         model_role="extract",                                       # cheap/fast model — this is parsing, not reasoning
         response_schema=CaregiverProfile,                           # the guardrail: validated before we get it
-        max_tokens=512,                                             # generous: gpt-oss/qwen spend hidden tokens first
+        max_tokens=1536,                                            # gpt-oss burns hidden reasoning tokens before the JSON;
+                                                                     # terse input ("I'm so tired") ironically needs MORE
+                                                                     # headroom (more to reason about), so keep this well
+                                                                     # above the reasoning nodes' 1024
     )
 
     return {
