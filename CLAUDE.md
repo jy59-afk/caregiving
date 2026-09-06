@@ -70,8 +70,8 @@ density already in `src/ingest.py` / `src/retrieval_tool.py`.
 ## Build order (one slice per session — resist doing the graph in one prompt)
 
 1. ✅ Scaffold repo
-2. Data layer — curate ~15 real services into `data/services.json`
-3. Vector index & retrieval tool — build index, get `recall@3` passing on labeled queries
+2. ✅ Data layer — 13 curated SG respite services in `data/services.json` (see `data/README.md` for schema + provenance; figures are pre-subsidy approximations from public sources, re-verify before real use)
+3. Vector index & retrieval tool — build index, get `recall@3` passing on labeled queries (10 labeled cases already in `tests/test_retrieval.py`)
 4. Model access wrapper — thin, Groq now / Bedrock later, with a smoke test
 5. Orchestration — Intake, Match & Rank, Explain & Draft nodes **each tested in isolation** before wiring the graph
 6. Guardrails — iteration cap, allow-list, schema validation; test that no send/book tool is reachable

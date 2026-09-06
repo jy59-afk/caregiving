@@ -68,7 +68,7 @@ pytest -v                        # unit tests; recall@3 runs once the index exis
 ## Status
 
 - [x] Repo scaffold, config, retrieval starter
-- [ ] Curated dataset (~15 real services)
+- [x] Curated dataset — 13 SG respite services ([data/README.md](data/README.md))
 - [ ] Vector index passing `recall@3` on labeled queries
 - [ ] Model access wrapper (Groq → Bedrock) + smoke test
 - [ ] LangGraph nodes: Intake, Match & Rank, Explain & Draft

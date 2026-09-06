@@ -58,24 +58,62 @@ def test_hard_filter_passes_everything_when_no_constraints():
 # 2. recall@3 — the graded RAG metric. Needs the built index.
 # ---------------------------------------------------------------------------
 
-# Each case: a caregiver-style free-text need + the service that should surface.
-# Expand to 8-10 cases covering the real dataset's variety before relying on the number.
+# Each case: a caregiver-style free-text need + the service that should surface,
+# labeled against the curated data/services.json dataset.
 LABELED_QUERIES = [
     {
-        "query": "dad gets confused during the day and needs someone patient supervising him",
-        "expected": "Sunshine Corner Day Centre",
+        # dementia + wandering + secure outdoor space -> Apex Harmony Lodge
+        "query": "my father has advanced dementia and keeps trying to walk out the door, I need somewhere he can't wander off from",
+        "expected": "Apex Harmony Lodge Dementia Day Care Centre (Pasir Ris)",
     },
     {
-        "query": "mum won't leave the house and needs help moving around at home",
-        "expected": "Golden Years Home Respite",
+        # up all night / sundowning -> night respite
+        "query": "mum is awake and disoriented every night and I haven't slept properly in weeks",
+        "expected": "NTUC Health Night Respite / Staycay@Henderson",
     },
     {
-        "query": "I need to travel for a week — somewhere safe for my father to stay overnight",
-        "expected": "Harmony Short-Stay Centre",
+        # refuses to leave home / bedbound -> in-home
+        "query": "my husband is bedbound and refuses to go to any centre, I just need a few hours of cover at home",
+        "expected": "Homage Home-Based Respite Care",
+    },
+    {
+        # extended absence / overseas travel -> nursing home respite
+        "query": "I have to fly overseas for three weeks and there's no one else to look after my dad",
+        "expected": "NTUC Health Nursing Home Respite (Jurong)",
+    },
+    {
+        # weekday cover fine, weekend gap, tight budget -> weekend respite
+        "query": "my helper covers weekdays but I get no break on saturday and sunday and money is really tight",
+        "expected": "St Luke's ElderCare Weekend Respite Care (Bishan)",
+    },
+    {
+        # post-stroke rehab + break -> St Luke's day care + rehab
+        "query": "my mother is recovering from a stroke and needs physiotherapy plus somewhere to go during the day",
+        "expected": "St Luke's ElderCare Senior Care Centre (Teck Whye)",
+    },
+    {
+        # general frailty, mobile, not dementia, working caregiver in central area
+        "query": "dad is frail and lonely at home while I'm at work, he's still mobile and his memory is basically fine",
+        "expected": "NTUC Health Senior Day Care (Toa Payoh)",
+    },
+    {
+        # early dementia, newly diagnosed, west side
+        "query": "my wife was just diagnosed with early dementia, we live in bukit batok and want a weekday programme for her",
+        "expected": "New Horizon Centre (Bukit Batok) - Dementia Singapore",
+    },
+    {
+        # dementia day care, north of Singapore
+        "query": "looking for a dementia day centre near yishun so I don't have to travel across the island every morning",
+        "expected": "AWWA Dementia Day Care Centre (Yishun)",
+    },
+    {
+        # post-hospital step-down, north-east, week-plus stay
+        "query": "dad is being discharged from hospital next week and needs a short nursing stay near hougang before coming home",
+        "expected": "All Saints Home Respite Care (Hougang)",
     },
 ]
 
-RECALL_AT_3_TARGET = 0.66  # minimum acceptable recall@3 on the labeled set; raise as the dataset/tuning improves
+RECALL_AT_3_TARGET = 0.7  # minimum acceptable recall@3 on the labeled set; raise as the dataset/tuning improves
 
 
 @pytest.mark.skipif(
