@@ -67,6 +67,26 @@ def test_run_intake_passes_relabelled_transcript_without_system_turns(monkeypatc
     assert seen["kwargs"]["response_schema"] is CaregiverProfile  # the guardrail is wired
 
 
+def test_intake_prompt_and_transcript_support_selecting_a_listed_option(monkeypatch):
+    """The model is told to detect a draft request / option pick, and the prior
+    assistant list is in the transcript it reads."""
+    seen = {}
+    monkeypatch.setattr(llm, "complete", lambda messages, **kw: seen.update(messages=messages) or _profile())
+
+    state = new_state([
+        {"role": "user", "content": "dad dementia, choa chu kang, $30"},
+        {"role": "assistant", "content": "Closest options:\n1. St Luke's ElderCare (Teck Whye) — ...\n2. Econ Medicare Centre (CCK) — ..."},
+        {"role": "user", "content": "draft an enquiry to the first one"},
+    ])
+    run_intake(state)
+
+    system_prompt = seen["messages"][0]["content"]
+    assert "wants_draft" in system_prompt and "selected_option" in system_prompt
+    transcript = seen["messages"][-1]["content"]
+    assert "St Luke's ElderCare (Teck Whye)" in transcript   # the list is visible to the extractor
+    assert "draft an enquiry to the first one" in transcript
+
+
 # ---------------------------------------------------------------------------
 # Empty-conversation shortcut
 # ---------------------------------------------------------------------------

@@ -12,81 +12,173 @@ for the IGNITE Agentic AI Hackathon 2026.
 > budget and care needs takes more time and certainty than a caregiver
 > already stretched thin has to spare.
 
-See [CLAUDE.md](CLAUDE.md) for the working context,
-[docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) for the full problem statement
-and evidence, and [docs/EVALUATION.md](docs/EVALUATION.md) for the latest
-evaluation numbers.
-
 ## What it does (V1)
 
 ```
- Intake ─▶ Match & Rank ─▶ Explain & Draft ─▶ Consent gate ─▶ Output
-   │            │                                (HITL)
-   │            └─(nothing fits)──────────────────────────────▶ Output
-   └─(needs a clarifying answer, or hit the step cap)─────────▶ Output
+ Intake ──▶ Match & Rank ──▶ Explain & Draft ──▶ Consent gate ──▶ Output
+   │             │                                                   ▲
+   │             ├─(nothing fits, caregiver asks to act anyway)──────┤
+   │             └─(nothing fits at all)───────────────────────────▶ Output
+   └─(needs a clarifying answer, or hit the step cap)───────────────▶ Output
 ```
 
-1. **Intake** — the caregiver describes their situation in plain language; a
-   cheap model extracts a typed `CaregiverProfile` (need, budget, area,
-   schedule). Missing a must-have fact → it asks one clarifying question.
-2. **Match & Rank** — hybrid retrieval over the curated dataset: semantic
-   similarity on the free-text need widens the candidate set, then **hard
-   filters on budget and area** cut it, then a stronger model reranks the
-   survivors and writes a one-line, passage-grounded "why this fits".
-3. **Explain & Draft** — drafts a first-enquiry message for the top match,
-   grounded in that service's real description.
-4. **Consent gate → Output** — the human-in-the-loop seam. **Nothing is sent
-   or booked.** The caregiver reviews the draft and sends it themselves.
+One LangGraph pipeline (`src/graph.py`), re-run on the full conversation
+transcript every turn, does four things:
 
-## Project layout
+1. **Intake** — extracts a typed `CaregiverProfile` from the conversation so
+   far: the care need in plain language, budget, area, schedule, and who the
+   caregiver is caring for. It also picks up on two follow-up signals — that
+   the caregiver explicitly asked to **draft/send an enquiry**, or that they
+   **picked a specific option** from a list just shown (by name or by
+   position, e.g. "the second one"). If a critical fact is still missing, it
+   returns one clarifying question instead of guessing.
+2. **Match & Rank** — hybrid retrieval: the free-text need is embedded and
+   matched against the service dataset, the candidate set is cut down by
+   **hard filters on budget and area**, and a model reranks what's left into
+   an ordered shortlist (up to 4) with a one-line, passage-grounded "why this
+   fits" for each. **If nothing clears every constraint**, it doesn't dead-end:
+   it deterministically ranks the next-best services by location → budget →
+   schedule (no model call) as a clearly-labelled fallback list.
+3. **Explain & Draft** — drafts a ready-to-send enquiry (subject + body) for
+   the top match. On the fallback path, it only drafts if the caregiver asked
+   for it or named an option — and words the message as a first question,
+   since a fallback option doesn't fully fit.
+4. **Consent gate → Output** — the human-in-the-loop seam. **No tool that
+   sends, books, or contacts anyone exists anywhere in this codebase.** The
+   Output node assembles the caregiver-facing reply (the shortlist, or the
+   fallback list, or the clarifying question) and, when there's a draft,
+   presents it for the caregiver to review, edit, and send themselves.
 
-| Path | What's there |
-|---|---|
-| `src/ingest.py` | Builds the FAISS vector index from `data/services.json` |
-| `src/retrieval_tool.py` | `search_services(profile)` — the hybrid-retrieval tool Match & Rank calls |
-| `src/llm.py` | Provider-agnostic model access; the schema-validation guardrail lives here |
-| `src/state.py` | The state contract (`RespiteState`) + every Pydantic output schema |
-| `src/intake.py`, `src/match_rank.py`, `src/explain_draft.py` | The three worker nodes |
-| `src/guardrails.py` | Iteration cap, tool allow-list, source scan for action tools |
-| `src/graph.py` | LangGraph wiring + node-transition tracing (`_traced`) |
-| `src/app.py` | The thin Streamlit chat UI (not the graded component) |
-| `src/evaluate.py` | 8-scenario evaluation harness → `docs/EVALUATION.md` |
-| `data/services.json` | 13 curated SG respite services ([data/README.md](data/README.md)) |
-| `data/vector_index/` | Built index — **not committed**, rebuild with `python src/ingest.py` |
-| `tests/` | `pytest` — unit tests + the `recall@3` retrieval eval |
+**Product front-end:** the pipeline is served over HTTP by `src/api.py`
+(FastAPI), which powers the Airbnb-style web app in `web/` — ranked photo
+cards synced to a live Leaflet map, with a chat panel to describe the care
+situation. When a draft is ready, the page offers an **"open in your email
+app"** (`mailto:`) button, or a link to the centre's own web contact form —
+so sending is always a step the caregiver takes in their own mail client,
+never something the app does for them.
 
-## Setup
+The graded proof-of-concept is the **Agentic AI pipeline** in `src/`
+(`graph.py` and everything it calls); `web/` + `src/api.py` is the one
+interface that ships with it.
 
-Requires **Python 3.12** (`torch` / `faiss-cpu` have no 3.13+ wheels yet).
+---
 
-```bash
+## 1. Environment setup
+
+### Requirements
+
+- **Python 3.12** — `torch` and `faiss-cpu` don't ship 3.13+ wheels yet, so a
+  newer interpreter will fail at `pip install`.
+- **AWS Bedrock access** in `us-east-1` with model access granted for Claude
+  Sonnet 4.5, Claude Haiku 4.5, and Cohere Embed English v3 — this is the
+  stack the project was built and demoed on, and the only one documented
+  here.
+- **Run every command from the repo root** (the folder this README is in) —
+  `conftest.py`, the `.env` loader in `src/config.py`, and the relative paths
+  in `src/api.py`/`src/config.py` (`data/`, `web/`) are all anchored there.
+  There are no extra `PYTHONPATH`/path variables to set by hand.
+
+> The codebase also supports a free `LLM_BACKEND=groq` + on-device
+> `EMBEDDING_BACKEND=local` mode for local dev iteration without an AWS
+> account (see `.env.example`). It isn't documented as a setup path here
+> because the graded/demo build — and this README — targets Bedrock only.
+
+### 1.1 Create and activate a virtual environment
+
+```powershell
+# Windows (PowerShell or CMD), from the repo root
 py -3.12 -m venv .venv
-.venv\Scripts\activate            # Windows (PowerShell/CMD)
-# source .venv/bin/activate       # macOS / Linux
-pip install -r requirements.txt   # or: pip install -r requirements-lock.txt (exact tested freeze)
-copy .env.example .env            # Windows  (cp on macOS/Linux)
+.venv\Scripts\activate
 ```
-
-Then fill in `.env`:
-
-- `GROQ_API_KEY` — from <https://console.groq.com/keys> (free; used for dev).
-  Switch to Bedrock for the demo build with `LLM_BACKEND=bedrock` + AWS creds.
-- Leave `EMBEDDING_BACKEND=local` to use the on-device embedding model (no
-  keys needed). Switch to `bedrock` for Titan embeddings, then rebuild the index.
-
-## Run
 
 ```bash
-python src/ingest.py             # build data/vector_index/ (downloads the MiniLM model on first run)
-python src/check_env.py          # smoke-test the model backend + print the active models
-python src/graph.py              # run one scripted caregiver turn end-to-end, with the node trace
-streamlit run src/app.py         # the chat UI on http://localhost:8501
-python src/evaluate.py           # 8 scenarios end-to-end → refreshes docs/EVALUATION.md
-pytest -q                        # unit tests + recall@3 (offline; the eval suite is gated behind RUN_EVAL=1)
+# macOS / Linux, from the repo root
+python3.12 -m venv .venv
+source .venv/bin/activate
 ```
 
-`python src/graph.py` and `streamlit run src/app.py` both print a node-by-node
-trace to the terminal:
+Your shell prompt should now show `(.venv)`. Every command below assumes the
+venv is active.
+
+### 1.2 Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+- `requirements.txt` uses version **ranges** (a fresh resolve, kept current).
+- `requirements-lock.txt` is the exact, tested freeze from a working venv —
+  use it instead (`pip install -r requirements-lock.txt`) if a fresh resolve
+  of the ranges misbehaves on your machine.
+- No Docker file is provided — the venv + `requirements.txt` above is the
+  supported setup path.
+- **`faiss-cpu` is required no matter what** — it's the vector-index engine
+  retrieval is built on, unrelated to which LLM answers. `groq` and
+  `sentence-transformers` are only imported if you switch `LLM_BACKEND`/
+  `EMBEDDING_BACKEND` to the local dev mode above; they're listed in
+  `requirements.txt` for that path but pip installing them costs nothing if
+  you never use it.
+
+### 1.3 Secrets and keys — `.env`
+
+Real secrets are **never** committed; `.env` is git-ignored
+(see [`.gitignore`](.gitignore)) and only the template, `.env.example`, is
+tracked.
+
+```powershell
+copy .env.example .env         # Windows
+# cp .env.example .env         # macOS / Linux
+```
+
+Then open `.env` and set:
+
+| Variable | Notes |
+|---|---|
+| `LLM_BACKEND` | `bedrock` |
+| `AWS_REGION` | `us-east-1` |
+| `AWS_PROFILE` (or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`) | prefer an SSO profile (`aws sso login`) over pasted temporary keys, which expire mid-demo |
+| `BEDROCK_EXTRACT_MODEL` | `us.anthropic.claude-haiku-4-5-...` — must use the `us.` cross-region inference-profile prefix; bare `anthropic.` ids aren't invocable |
+| `BEDROCK_REASONING_MODEL` | `us.anthropic.claude-sonnet-4-5-...` |
+| `EMBEDDING_BACKEND` | `bedrock` |
+| `BEDROCK_EMBED_MODEL` | `cohere.embed-english-v3` |
+| `MAX_ITERATIONS` | hard cap on the agent's orchestration loop (guardrail, see below) — `6` is a sensible default |
+
+> **Never** paste real key values into a commit, a chat, or a shared file.
+> If a `.env` with live keys is ever accidentally committed, treat those
+> keys as compromised: rotate/regenerate them (AWS IAM) immediately, even
+> after removing the file from git.
+
+### 1.4 Verify the setup
+
+```bash
+python src/check_env.py
+```
+
+Prints the active backend/models, sends one test completion, and embeds a
+test string via Bedrock — exits non-zero with a readable reason on any
+failure (bad credentials, no model access granted, wrong region, etc.), so
+run this before chasing a bug in the app itself.
+
+---
+
+## 2. Run it — see the product webpage
+
+```bash
+python src/ingest.py                                       # 1. build the FAISS index from data/services.json
+python -m uvicorn api:app --app-dir src --port 8000         # 2. start the web app
+```
+
+Then open **http://localhost:8000** — that's the product webpage (ranked
+photo cards + live map). Step 1 only needs to be re-run when
+`data/services.json` changes; it calls Bedrock to embed each record.
+
+`uvicorn ... --reload` (see `.claude/launch.json`) auto-restarts on code
+changes if you're iterating on `src/` or `web/`.
+
+### What you'll see in the terminal
+
+Both `uvicorn` and `python src/graph.py` (below) print a node-by-node trace
+of the agent's run:
 
 ```
 respite.graph  -> intake         (step 0)
@@ -97,15 +189,137 @@ respite.graph  -> match_rank     (step 1)
 respite.graph     outcome: matches_ready
 ```
 
+### One scripted run, no server
+
+```bash
+python src/graph.py
+```
+
+Runs one hard-coded caregiver turn straight through the graph and prints the
+trace + result — the fastest way to confirm the pipeline itself works,
+independent of the web server.
+
+### Tests and evaluation
+
+```bash
+pytest -q                 # unit tests + recall@3 retrieval check (offline, no API calls)
+python src/evaluate.py    # 8 scripted end-to-end scenarios, calls the live model
+```
+
+`pytest` is safe to run with no API usage; `src/evaluate.py` makes real
+Bedrock calls and prints a results table to the terminal.
+
+---
+
+## 3. Project structure — what's in every file
+
+```
+hackathon/
+├── README.md                     this file
+├── requirements.txt              dependency ranges — `pip install -r requirements.txt`
+├── requirements-lock.txt         exact tested freeze — use if requirements.txt misbehaves
+├── pytest.ini                    pytest config: test path, warning filters for known third-party deprecations
+├── conftest.py                   puts src/ on sys.path so tests can `import config`, `import graph`, etc.
+├── .env.example                  template for local secrets — copy to .env and fill in (see §1.3)
+├── .env                          your real secrets — gitignored, never committed
+├── .gitignore                    what git excludes (venv, caches, .env, build artifacts — see below)
+├── .gitattributes                line-ending + binary-diff rules (LF in repo, binary for pdf/png/faiss/pkl)
+├── .claude/launch.json           VS Code debug config for running the web app
+│
+├── src/                           the graded Agentic AI component
+│   ├── config.py                  reads .env into a typed, validated Settings object (single source of config)
+│   ├── state.py                   the LangGraph state contract (RespiteState) + every Pydantic I/O schema
+│   ├── ingest.py                  builds data/vector_index/ (FAISS) from data/services.json
+│   ├── retrieval_tool.py          search_services(profile) — the hybrid-retrieval tool Match & Rank calls
+│   ├── llm.py                     model access (Bedrock Converse) + the schema-validation guardrail
+│   ├── intake.py                  node: extracts CaregiverProfile from the conversation, or asks a clarifying question
+│   ├── match_rank.py              node: retrieval + hard filters (budget/area) + LLM rerank + fallback ranking
+│   ├── explain_draft.py           node: drafts the first-enquiry message for the top (or requested) match
+│   ├── guardrails.py              iteration cap, tool allow-list, static scan for any send/book tool
+│   ├── graph.py                   wires the nodes into the LangGraph state machine + node-transition trace
+│   ├── geo.py                     locate(service) — Singapore town-centroid coordinates for the map
+│   ├── api.py                     FastAPI app: serves web/, /images, and POST /api/chat + GET /api/featured
+│   └── check_env.py               smoke test: confirms Bedrock model + embedding access actually work
+│
+├── web/                            the product front-end (served by src/api.py)
+│   ├── index.html                 page shell: header, chat panel, results (cards + map)
+│   ├── app.js                     fetches /api/featured + /api/chat, renders cards, drives the Leaflet map
+│   └── styles.css                 all styling
+│
+├── data/                           knowledge base the agent matches against
+│   ├── README.md                  record schema, provenance, dataset-coverage notes — read this before editing services.json
+│   ├── services.json              76 curated SG respite services — the working dataset (committed; graded deliverable)
+│   ├── services.sample.json       3-record schema example only
+│   ├── contacts.md                researched enquiry email/web-form/phone per centre
+│   ├── vector_index/               FAISS build artifact — gitignored, rebuild with `python src/ingest.py`
+│   └── images/                     card photos (Pexels licence, no attribution needed) — see data/images/README.md
+│
+└── tests/                          pytest suite — one file per src/ module, plus test_api.py for the FastAPI layer
+```
+
+`src/evaluate.py` (the evaluation harness) and `CLAUDE.md`/`docs/` (build
+log and planning docs) are still on disk but are not part of the pushed
+repo — see below.
+
+### `.gitignore` at a glance — why each thing is excluded
+
+| Excluded | Why |
+|---|---|
+| `.env`, `.env.*` (except `.env.example`) | real secrets |
+| `.venv/`, `venv/`, `env/`, `__pycache__/`, `*.py[cod]`, `.python-version` | virtual env + Python bytecode — regenerated by `pip install` |
+| `.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`, `.coverage`, `htmlcov/` | tool caches, not source |
+| `data/vector_index/`, `*.faiss` | rebuilt from `data/services.json` via `python src/ingest.py` |
+| `.vscode/`, `.idea/`, `*.swp`, `.DS_Store`, `Thumbs.db` | editor/OS cruft |
+| `CLAUDE.md`, `docs/` | working/build-log and planning docs — not needed to run the product, not part of the final GitHub repo |
+| `src/app.py` | the earlier Streamlit chat interface, superseded by `web/` + `src/api.py` |
+
+If any of these were committed *before* `.gitignore` covered them, adding
+the pattern alone won't remove them from git — see §4 below.
+
+---
+
+## 4. Committing and pushing to GitHub
+
+From the repo root, with the updated `.gitignore` in place:
+
+```bash
+git status                     # sanity-check what's about to be staged
+git add -A
+git status                     # confirm .env, .venv/, CLAUDE.md, docs/, src/app.py, etc. are NOT listed
+git commit -m "Add web front-end, README, and environment setup"
+git push
+```
+
+If `git status` after `git add -A` shows any of `.env`, `.venv/`,
+`__pycache__/`, `.pytest_cache/`, `CLAUDE.md`, `docs/`, or `src/app.py` as
+staged, it means that file was already tracked from before `.gitignore`
+covered it. Untrack it (this removes it from git going forward, not from
+your disk) and retry:
+
+```bash
+git rm -r --cached .venv __pycache__ .pytest_cache .env CLAUDE.md docs src/app.py
+git add -A
+git commit -m "Stop tracking local/build files and the superseded Streamlit interface"
+git push
+```
+
+> **If `.env` was ever committed with real keys in it**, removing it now
+> stops *future* commits from exposing it, but the keys are still visible in
+> git history. Rotate/regenerate every key that was in it (AWS IAM) — don't
+> rely on deleting the file alone.
+
+---
+
 ## Guardrails (responsible-AI design)
 
 The agent is fenced in by **mechanism, not prompt wording** — all three checks
 live in [`src/guardrails.py`](src/guardrails.py):
 
-- **No send/book tool exists in V1.** `ALLOWED_TOOLS` is a closed set —
-  `search_services` + `draft_message` only — and `scan_source_for_action_tools()`
-  greps `src/` for any `def send_* / book_* / submit_* / call_* ...`; the test
-  suite fails loudly if one is ever added. The agent drafts; the caregiver sends.
+- **No send/book tool exists anywhere in this codebase.** `ALLOWED_TOOLS` is
+  a closed set — `search_services` + `draft_message` only — and
+  `scan_source_for_action_tools()` greps `src/` for any
+  `def send_* / book_* / submit_* / call_* ...`; the test suite fails loudly
+  if one is ever added. The agent drafts; the caregiver sends.
 - **Every model output is schema-validated before use.** `llm.complete(...,
   response_schema=…)` forces JSON, parses it, validates against a Pydantic
   model, and raises `LLMSchemaError` on any failure — so every node inherits
@@ -114,18 +328,21 @@ live in [`src/guardrails.py`](src/guardrails.py):
   `.env`). `iteration_cap_reached()` is checked in the conditional edge after
   every worker node; tripping it routes straight to Output.
 
-Latest evaluation run: schema-validation **100%**, tool-call success **100%**,
-task-completion **8/8**, 0 answer-fidelity issues, retrieval **recall@3 = 0.80**.
-Full table in [docs/EVALUATION.md](docs/EVALUATION.md).
+When nothing clears every constraint, Match & Rank does not dead-end: it
+returns the next-best services ranked location > budget > schedule (hard
+filters ignored, deterministic, no draft) as `fallback_matches`, and Output
+shows them with a "check what they can take on" caveat — drafting an enquiry
+from that list only if the caregiver explicitly asks or names an option.
 
-## Status — V1 build complete
+---
 
-- [x] Repo scaffold, config, retrieval starter
-- [x] Curated dataset — 13 SG respite services ([data/README.md](data/README.md))
-- [x] Vector index + hybrid retrieval — `recall@3 = 0.80` on 10 labeled queries
-- [x] Model access wrapper (Groq ↔ Bedrock, one-line switch) + smoke test
-- [x] LangGraph nodes: Intake, Match & Rank, Explain & Draft
-- [x] Guardrails (iteration cap, tool allow-list, source scan) + wired graph
-- [x] Streamlit chat UI
-- [x] Evaluation harness → [docs/EVALUATION.md](docs/EVALUATION.md)
-- [x] Polish — README, node-transition trace, [demo script](docs/DEMO_SCRIPT.md)
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `pip install` fails on `torch`/`faiss-cpu` | You're not on Python 3.12 — recreate the venv with `py -3.12` / `python3.12` |
+| `/api/chat` returns 503 "service index isn't built yet" | Run `python src/ingest.py` from the repo root |
+| `python src/check_env.py` fails | Check `.env`: `LLM_BACKEND=bedrock`, correct `AWS_REGION`, and that your AWS credentials/profile actually have model access granted for the configured Bedrock models |
+| Bedrock `AccessDeniedException` | Request model access for Claude Sonnet 4.5 / Haiku 4.5 / Cohere Embed English v3 in the Bedrock console for the region in `.env` |
+| Blank/broken page at `localhost:8000` | Confirm uvicorn's `--app-dir src` flag is present and you're running it from the repo root |
+| `ModuleNotFoundError` running `pytest` | Run `pytest` from the repo root (not `tests/`) — `conftest.py` puts `src/` on the path only from there |

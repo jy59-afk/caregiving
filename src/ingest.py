@@ -6,14 +6,12 @@ Run from the repo root:  python src/ingest.py
 Rebuild whenever data/services.json changes, or after switching EMBEDDING_BACKEND.
 """
 
-import json  # for loading the curated service records from disk
-import os    # for reading which embedding backend to use from the environment
+import json  # for loading the curated service records from disk + writing the index sidecar
 from pathlib import Path  # for building filesystem paths that do not depend on the caller's working directory
 
-from dotenv import load_dotenv  # pulls EMBEDDING_BACKEND / AWS_* out of the local .env so dev and demo share one config surface
 from langchain_community.vectorstores import FAISS  # lightweight, zero-infra vector store — good fit for a few dozen/hundred records
 
-load_dotenv()  # load .env once at import time so os.getenv() below sees the project's configured backend
+from config import settings  # typed view of .env — embedding backend + Bedrock model id + region
 
 # Anchor every data path to the repo root (this file lives in src/), so `python src/ingest.py`
 # and `pytest` from anywhere both resolve data/ to the same place.
@@ -43,25 +41,65 @@ def to_document_text(service: dict) -> str:
     )
 
 
+LOCAL_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"  # the on-device model name, referenced by the index sidecar too
+
+
 def get_embeddings():
     """
-    Return the embedding backend to use, switchable via an environment
-    variable so local/free development and the Bedrock demo build share the
-    same ingestion script.
-    """
-    backend = os.getenv("EMBEDDING_BACKEND", "local")  # default to free local embeddings for day-to-day dev
+    Return the embedding backend to use, switchable via `EMBEDDING_BACKEND` in
+    `.env` so local/free development and the Bedrock demo build share the same
+    ingestion script.
 
-    if backend == "bedrock":
-        from langchain_community.embeddings import BedrockEmbeddings  # imported lazily so local dev doesn't need boto3 configured
-        return BedrockEmbeddings(model_id="amazon.titan-embed-text-v2:0")  # Bedrock-hosted embedding model, same AWS account as the LLM calls
+      local   -> sentence-transformers/all-MiniLM-L6-v2  (384-dim, on-device, free)
+      bedrock -> settings.bedrock_embed_model            (default `cohere.embed-english-v3`,
+                 1024-dim — recall@3 0.80 here vs Titan V2's 0.50)
+
+    The query path (`retrieval_tool`) calls this too, so a query is always
+    embedded with the same model the index was built with.
+    """
+    if settings.embedding_backend == "bedrock":
+        from langchain_community.embeddings import BedrockEmbeddings  # lazy: local dev doesn't need boto3 configured
+        return BedrockEmbeddings(
+            model_id=settings.bedrock_embed_model,   # e.g. "cohere.embed-english-v3"
+            region_name=settings.aws_region,         # must match where the model is enabled
+        )
 
     # local, free fallback — no API key or AWS setup required
-    from langchain_community.embeddings import HuggingFaceEmbeddings  # runs entirely on-device, good for iterating before Bedrock access is granted
-    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")  # small, fast, widely-used general-purpose embedding model
+    from langchain_community.embeddings import HuggingFaceEmbeddings  # runs entirely on-device
+    return HuggingFaceEmbeddings(model_name=LOCAL_EMBED_MODEL)
+
+
+def _current_embedding_id() -> str:
+    """A short string identifying the model behind `get_embeddings()`, for the
+    index sidecar so a stale index (wrong dimension) is caught, not crashed on."""
+    if settings.embedding_backend == "bedrock":
+        return f"bedrock:{settings.bedrock_embed_model}"
+    return f"local:{LOCAL_EMBED_MODEL}"
+
+
+INDEX_META_NAME = "meta.json"  # sidecar next to the FAISS files, recording which model built the index
+
+
+def _write_index_meta(out_path: Path, services: list[dict], dim: int) -> None:
+    """Record the embedding model + vector dimension used to build this index,
+    so `retrieval_tool` can refuse a stale index rather than crash on a
+    dimension mismatch when `EMBEDDING_BACKEND` is changed without rebuilding."""
+    (Path(out_path) / INDEX_META_NAME).write_text(
+        json.dumps(
+            {
+                "embedding_backend": settings.embedding_backend,
+                "embedding_id": _current_embedding_id(),
+                "dim": dim,
+                "count": len(services),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def build_index(services: list[dict], out_path: Path | str = DEFAULT_INDEX_PATH) -> FAISS:
-    """Embed every service passage and persist a FAISS index to disk."""
+    """Embed every service passage and persist a FAISS index (+ a meta sidecar) to disk."""
     embeddings = get_embeddings()                                    # pick embedding backend (local or bedrock)
 
     texts = [to_document_text(s) for s in services]                  # one embeddable passage per service
@@ -78,11 +116,16 @@ def build_index(services: list[dict], out_path: Path | str = DEFAULT_INDEX_PATH)
     ]
 
     store = FAISS.from_texts(texts, embeddings, metadatas=metadatas)  # builds the in-memory vector index from the passages
+    out_path = Path(out_path)
     store.save_local(str(out_path))                                   # persists the index + metadata to disk so retrieval_tool.py can load it without re-embedding
+    _write_index_meta(out_path, services, dim=store.index.d)          # record the model/dim so a stale index is caught later
     return store
 
 
 if __name__ == "__main__":
     services = load_services()                     # load the curated dataset
-    build_index(services)                          # embed and persist the vector index
-    print(f"Indexed {len(services)} services into {DEFAULT_INDEX_PATH}")  # simple confirmation for the terminal
+    store = build_index(services)                  # embed and persist the vector index
+    print(
+        f"Indexed {len(services)} services into {DEFAULT_INDEX_PATH} "
+        f"({_current_embedding_id()}, dim={store.index.d})"
+    )

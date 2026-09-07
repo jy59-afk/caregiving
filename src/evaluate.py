@@ -103,9 +103,9 @@ SCENARIOS: list[Scenario] = [
             "after subsidy and transport, and claims no booking."
         ),
     ),
-    # --- 2. budget forces no match ----------------------------------------
+    # --- 2. budget clears nothing -> next-best fallback list --------------
     Scenario(
-        id="budget_forces_no_match",
+        id="budget_forces_fallback",
         messages=[
             {
                 "role": "user",
@@ -116,17 +116,18 @@ SCENARIOS: list[Scenario] = [
                 ),
             }
         ],
-        expected_outcome="no_matches",
+        expected_outcome="fallback_matches",
         good_result=(
-            "Every candidate (Apex Harmony Lodge Pasir Ris is $30) is above the $15 "
-            "ceiling, so the hard budget filter empties the shortlist. Output should "
-            "suggest widening the budget or considering subsidy — not invent a cheaper "
-            "option."
+            "Every candidate is above the $15 ceiling, so the hard budget filter empties "
+            "the shortlist. Output must NOT invent a cheaper option — instead it returns "
+            "the 4 next-best services ranked location-first then budget (Pasir Ris options "
+            "lead; within an area the least-over-budget wins), each labelled 'closest "
+            "available option ... over your $15 budget', with no draft."
         ),
     ),
-    # --- 3. area forces no match -----------------------------------------
+    # --- 3. area clears nothing -> next-best fallback list ---------------
     Scenario(
-        id="area_forces_no_match",
+        id="area_forces_fallback",
         messages=[
             {
                 "role": "user",
@@ -137,12 +138,13 @@ SCENARIOS: list[Scenario] = [
                 ),
             }
         ],
-        expected_outcome="no_matches",
+        expected_outcome="fallback_matches",
         good_result=(
             "No service in the dataset is in Sengkang, so the area hard filter empties "
-            "the shortlist. Output should suggest widening the area (the nearest real "
-            "option is All Saints Home in Hougang). It must not return an out-of-area "
-            "centre as if it were nearby."
+            "the shortlist. Nothing is in-area and no budget was stated, so the "
+            "location-first / budget / schedule fallback falls through to schedule: it "
+            "should surface weekday day programmes, each 'why' noting the area is not "
+            "Sengkang. No out-of-area centre is presented as if it were nearby."
         ),
     ),
     # --- 4. vague input -> clarifying question ---------------------------
@@ -335,7 +337,10 @@ def check_fidelity_proxy(final: dict) -> list[str]:
     """
     issues: list[str] = []
 
-    for match in final.get("candidate_matches", []) or []:  # each recommended service
+    # Both the true-fit shortlist and the no-match fallback list must carry a
+    # grounded passage + a non-empty 'why'.
+    shown = (final.get("candidate_matches", []) or []) + (final.get("fallback_matches", []) or [])
+    for match in shown:  # each service shown to the caregiver
         if not match.why.strip():
             issues.append(f"{match.name}: empty 'why' line")
         if not match.grounding_passage.strip():
@@ -408,7 +413,7 @@ def compute_recall_at_3() -> tuple[float, int, int]:
     hits = 0
     for case in queries:
         profile = {"needs_description": case["query"], "budget": None, "area": None}
-        results = retrieval_tool.search_services(profile, k=8)  # NOT the wrapped name — recall != tool-call metric
+        results = retrieval_tool.search_services(profile, k=8)[:3]  # NOT the wrapped name — recall != tool-call metric; tool returns top-4, this stays recall@3
         if any(r["name"] == case["expected"] for r in results):
             hits += 1
     total = len(queries)
@@ -461,8 +466,8 @@ def run_scenario(scenario: Scenario, *, judge: bool = False) -> ScenarioResult:
     finally:
         settings.max_iterations = original_cap  # always restore the cap
 
-    # Fidelity proxy only makes sense on a run that produced matches.
-    fidelity_issues = check_fidelity_proxy(final) if outcome == "matches_ready" else []
+    # Fidelity proxy makes sense on any run that showed services (true fit or fallback).
+    fidelity_issues = check_fidelity_proxy(final) if outcome in ("matches_ready", "fallback_matches") else []
 
     judge_supported = judge_total = None
     if judge and outcome == "matches_ready":
@@ -650,19 +655,21 @@ def render_report(report: SuiteReport, *, judged: bool) -> str:
     lines.append("## Appendix - fidelity review material")
     lines.append("")
     lines.append(
-        "For each `matches_ready` scenario: the shown match, its grounded 'why', "
-        "the passage it must be traceable to, and the drafted enquiry. Read these "
-        "side by side to confirm nothing is invented."
+        "For each `matches_ready` / `fallback_matches` scenario: the shown "
+        "services, each grounded 'why', the passage it must be traceable to, and "
+        "the drafted enquiry (matches_ready only). Read these side by side to "
+        "confirm nothing is invented."
     )
     lines.append("")
     for i, r in enumerate(report.results, start=1):
-        if r.outcome != "matches_ready":
+        if r.outcome not in ("matches_ready", "fallback_matches"):
             continue
-        lines.append(f"### {i}. `{r.scenario.id}`")
+        lines.append(f"### {i}. `{r.scenario.id}`  ({r.outcome})")
         lines.append("")
         lines.append(f"*Yardstick:* {r.scenario.good_result}")
         lines.append("")
-        for m in r.final.get("candidate_matches", []) or []:
+        shown = (r.final.get("candidate_matches", []) or []) + (r.final.get("fallback_matches", []) or [])
+        for m in shown:
             lines.append(f"- **{m.name}**")
             lines.append(f"  - why: {m.why}")
             lines.append(f"  - grounding passage: {m.grounding_passage}")

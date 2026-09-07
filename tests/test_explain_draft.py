@@ -84,7 +84,8 @@ def test_prompt_is_grounded_in_top_match_passage_only(monkeypatch):
     user_turn = seen["messages"][-1]["content"]
     assert "Top Match Centre runs a small-group weekday dementia day programme" in user_turn  # top match passage present
     assert "Second Centre" not in user_turn                                                    # only the top match is drafted for
-    assert seen["kwargs"]["model_role"] == "reasoning"
+    from config import settings  # DRAFT_MODEL_ROLE — "reasoning" by default, "extract" on a rate-limited Bedrock demo
+    assert seen["kwargs"]["model_role"] == settings.draft_model_role
     assert seen["kwargs"]["response_schema"] is DraftedMessage
 
 
@@ -97,3 +98,56 @@ def test_node_returns_only_draft_keys(monkeypatch):
     monkeypatch.setattr(llm, "complete", lambda *a, **k: DraftedMessage(service_name="A", subject="s", body="b"))
     out = run_explain_and_draft(_state_with_matches(_match()))
     assert set(out.keys()) == {"drafted_message", "iteration_count"}
+
+
+# ---------------------------------------------------------------------------
+# Drafting off the fallback (near-miss) list + conversational selection
+# ---------------------------------------------------------------------------
+
+def _spy(monkeypatch):
+    seen = {}
+
+    def spy(messages, **kwargs):
+        seen["messages"] = messages
+        seen["system"] = messages[0]["content"]
+        seen["user"] = messages[-1]["content"]
+        return DraftedMessage(service_name="x", subject="s", body="b")
+
+    monkeypatch.setattr(llm, "complete", spy)
+    return seen
+
+
+def test_drafts_off_fallback_list_when_no_candidate_matches(monkeypatch):
+    seen = _spy(monkeypatch)
+    state = new_state([{"role": "user", "content": "..."}])
+    state["caregiver_profile"] = CaregiverProfile(needs_description="cheap dementia day care in Choa Chu Kang", wants_draft=True)
+    state["candidate_matches"] = []
+    state["fallback_matches"] = [_match("St Luke's ElderCare (Teck Whye)"), _match("Econ Medicare Centre (CCK)")]
+
+    out = run_explain_and_draft(state)
+
+    assert out["drafted_message"] is not None                      # a draft WAS produced from the fallback list
+    assert "St Luke's ElderCare (Teck Whye)" in seen["user"]       # for the top fallback option
+    assert "does NOT match everything" in seen["system"]           # worded as a near-miss / first question
+
+
+def test_selected_option_by_name_picks_that_service(monkeypatch):
+    seen = _spy(monkeypatch)
+    state = new_state([{"role": "user", "content": "..."}])
+    state["caregiver_profile"] = CaregiverProfile(
+        needs_description="dementia care", selected_option="Econ Medicare Centre",
+    )
+    state["fallback_matches"] = [_match("St Luke's ElderCare (Teck Whye)"), _match("Econ Medicare Centre (CCK)")]
+
+    run_explain_and_draft(state)
+    assert "Econ Medicare Centre (CCK)" in seen["user"]            # drafted for the one they named, not the top
+
+
+def test_selected_option_by_position_picks_that_service(monkeypatch):
+    seen = _spy(monkeypatch)
+    state = new_state([{"role": "user", "content": "..."}])
+    state["caregiver_profile"] = CaregiverProfile(needs_description="dementia care", selected_option="the second one")
+    state["candidate_matches"] = [_match("First Centre"), _match("Second Centre"), _match("Third Centre")]
+
+    run_explain_and_draft(state)
+    assert "Second Centre" in seen["user"] and "First Centre" not in seen["user"]

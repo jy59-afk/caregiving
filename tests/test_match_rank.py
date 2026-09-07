@@ -45,16 +45,41 @@ def _state_with_profile(**profile_kw):
 # Empty retrieval — no model call
 # ---------------------------------------------------------------------------
 
-def test_empty_retrieval_returns_no_matches_without_calling_llm(monkeypatch):
+# A tiny fake dataset for the no-match fallback path (avoids reading data/services.json).
+_FAKE_SERVICES = [
+    {"name": "Cheap Weekday Centre", "care_type": "day-care", "days": "Mon-Fri", "hours": "8am-6pm",
+     "cost_per_session": 30, "area": "Bishan", "distance_km": 1.0, "description": "weekday day care"},
+    {"name": "Pricey Weekend Home", "care_type": "short-stay", "days": "Sat-Sun", "hours": "24-hour",
+     "cost_per_session": 200, "area": "Jurong", "distance_km": 9.0, "description": "residential weekend stay"},
+    {"name": "Mid Overnight Respite", "care_type": "night-respite", "days": "Nightly", "hours": "overnight",
+     "cost_per_session": 90, "area": "Bishan", "distance_km": 3.0, "description": "overnight cover"},
+    {"name": "Far Cheap Home Help", "care_type": "home-help", "days": "Daily", "hours": "flexible hourly",
+     "cost_per_session": 40, "area": "Woodlands", "distance_km": 12.0, "description": "in-home visits"},
+]
+
+
+def test_empty_retrieval_falls_back_to_next_best_without_calling_llm(monkeypatch):
     monkeypatch.setattr(match_rank, "search_services", lambda profile, k=8: [])
+    monkeypatch.setattr(match_rank, "load_services", lambda: _FAKE_SERVICES)
     monkeypatch.setattr(llm, "complete", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not call")))
 
-    state = _state_with_profile()
+    state = _state_with_profile(budget=50, area="Bishan", schedule="weekday daytime")
     state["iteration_count"] = 4
     out = run_match_and_rank(state)
 
-    assert out["candidate_matches"] == []
+    assert out["candidate_matches"] == []          # no true fit
     assert out["iteration_count"] == 5
+    names = [m.name for m in out["fallback_matches"]]
+    assert len(names) == 4                          # exactly the next 4 (the whole fake dataset here)
+    # location is the top priority: both Bishan options come before the out-of-area
+    # ones, even though "Far Cheap Home Help" ($40) is within budget and
+    # "Mid Overnight Respite" ($90) is over it.
+    assert names[:2] == ["Cheap Weekday Centre", "Mid Overnight Respite"]
+    assert names[2] == "Far Cheap Home Help"
+    # every fallback match still carries a grounded passage + a caveat 'why'.
+    for m in out["fallback_matches"]:
+        assert m.grounding_passage and "Closest available option" in m.why
+        assert m.similarity_score is None
 
 
 # ---------------------------------------------------------------------------
@@ -129,16 +154,16 @@ def test_invented_and_duplicate_names_are_dropped(monkeypatch):
     assert [m.name for m in out["candidate_matches"]] == ["Real One", "Real Two"]
 
 
-def test_reconcile_caps_at_three(monkeypatch):
-    retrieved = _retrieved(("S1", 0.1), ("S2", 0.2), ("S3", 0.3), ("S4", 0.4))
+def test_reconcile_caps_at_four(monkeypatch):
+    retrieved = _retrieved(("S1", 0.1), ("S2", 0.2), ("S3", 0.3), ("S4", 0.4), ("S5", 0.5))
     monkeypatch.setattr(match_rank, "search_services", lambda profile, k=8: retrieved)
     model_out = RankedMatches(matches=[
-        RankedMatch(name=n, why="ok", grounding_passage="x") for n in ("S1", "S2", "S3", "S4")
+        RankedMatch(name=n, why="ok", grounding_passage="x") for n in ("S1", "S2", "S3", "S4", "S5")
     ])
     monkeypatch.setattr(llm, "complete", lambda *a, **k: model_out)
 
     out = run_match_and_rank(_state_with_profile())
-    assert len(out["candidate_matches"]) == 3
+    assert len(out["candidate_matches"]) == 4
 
 
 # ---------------------------------------------------------------------------

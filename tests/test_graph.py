@@ -134,17 +134,29 @@ def test_clarifying_question_short_circuits_to_output(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Empty-shortlist branch
+# Empty-shortlist branch -> the next-best fallback list (no draft)
 # ---------------------------------------------------------------------------
 
-def test_no_matches_short_circuits_before_draft(monkeypatch):
+_FAKE_SERVICES = [
+    {"name": "In-Budget Bishan Day Care", "care_type": "day-care", "days": "Mon-Fri", "hours": "8am-6pm",
+     "cost_per_session": 35, "area": "Bishan", "distance_km": 1.0, "description": "weekday day care in Bishan"},
+    {"name": "Over-Budget Jurong Home", "care_type": "short-stay", "days": "Daily", "hours": "24-hour",
+     "cost_per_session": 150, "area": "Jurong", "distance_km": 8.0, "description": "residential nursing stay"},
+    {"name": "Over-Budget Bishan Night Respite", "care_type": "night-respite", "days": "Nightly", "hours": "overnight",
+     "cost_per_session": 110, "area": "Bishan", "distance_km": 2.0, "description": "overnight respite in Bishan"},
+]
+
+
+def test_no_match_falls_back_to_next_best_before_draft(monkeypatch):
     monkeypatch.setattr(match_rank, "search_services", lambda profile, k=8: [])
+    monkeypatch.setattr(match_rank, "load_services", lambda: _FAKE_SERVICES)
 
     calls = {"draft": 0}
 
     def fake_complete(messages, *, model_role, response_schema=None, **kwargs):
         if response_schema is CaregiverProfile:
-            return CaregiverProfile(needs_description="weekday dementia day care in Bishan", budget=40, area="Bishan")
+            return CaregiverProfile(needs_description="weekday dementia day care in Bishan", budget=40,
+                                    area="Bishan", schedule="weekday daytime")
         if response_schema is DraftedMessage:
             calls["draft"] += 1
             return DraftedMessage(service_name="x", subject="x", body="x")
@@ -154,10 +166,45 @@ def test_no_matches_short_circuits_before_draft(monkeypatch):
 
     final = graph_mod.run(_FULL_TRANSCRIPT)
 
-    assert final["outcome"] == "no_matches"
+    assert final["outcome"] == "fallback_matches"
+    assert final["candidate_matches"] == []
     assert final["drafted_message"] is None
     assert calls["draft"] == 0
-    assert "widening the budget" in final["final_response"].lower()
+    # location > budget > schedule: the two Bishan options come before the
+    # Jurong one; within Bishan, the in-budget day care leads.
+    assert [m.name for m in final["fallback_matches"]] == [
+        "In-Budget Bishan Day Care",
+        "Over-Budget Bishan Night Respite",
+        "Over-Budget Jurong Home",
+    ]
+    assert "closest options" in final["final_response"].lower()
+    assert "In-Budget Bishan Day Care" in final["final_response"]
+
+
+def test_no_match_still_drafts_when_the_caregiver_asks(monkeypatch):
+    """Follow-up 'draft me the email' on the fallback path -> Explain & Draft runs
+    for the closest option; outcome stays fallback_matches but a draft is attached."""
+    monkeypatch.setattr(match_rank, "search_services", lambda profile, k=8: [])
+    monkeypatch.setattr(match_rank, "load_services", lambda: _FAKE_SERVICES)
+
+    def fake_complete(messages, *, model_role, response_schema=None, **kwargs):
+        if response_schema is CaregiverProfile:
+            return CaregiverProfile(needs_description="weekday dementia day care in Bishan", budget=40,
+                                    area="Bishan", schedule="weekday daytime", wants_draft=True)
+        if response_schema is DraftedMessage:
+            return DraftedMessage(service_name="In-Budget Bishan Day Care",
+                                  subject="Enquiry", body="Hello, I know this may not fit my hours, but...")
+        raise AssertionError(f"unexpected schema {response_schema!r}")
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+    final = graph_mod.run(_FULL_TRANSCRIPT + [{"role": "user", "content": "draft me the email"}])
+
+    assert final["outcome"] == "fallback_matches"          # still a near-miss list
+    assert final["candidate_matches"] == []
+    assert final["drafted_message"] is not None            # ...but a draft was produced anyway
+    assert final["drafted_message"].service_name == "In-Budget Bishan Day Care"
+    assert "I've drafted an enquiry to In-Budget Bishan Day Care" in final["final_response"]
 
 
 # ---------------------------------------------------------------------------

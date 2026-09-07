@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Respite Navigator</title>
+
+  <!-- Leaflet (map). Pinned version, loaded from cdnjs. -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+  <link rel="stylesheet" href="/styles.css?v=15" />
+</head>
+<body>
+  <div id="app">
+    <!-- ---------- header ------------------------------------------------ -->
+    <header class="site-header">
+      <div class="brand">
+        <span class="mark">🧭</span>
+        <span>RespiteSG</span>
+      </div>
+
+      <div class="header-right">
+        <a class="link" href="https://www.aic.sg/Care-Services/Nursing-Home-Respite-Care" target="_blank" rel="noopener">
+          How respite care works
+        </a>
+        <div class="menu" aria-label="menu">
+          <span>☰</span>
+          <span class="avatar">B</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ---------- chat panel ------------------------------------------- -->
+    <section class="chat-panel">
+      <div class="chat-inner">
+        <p class="chat-lead">
+          <strong>Tell me about the care situation and the break you need</strong> —
+          I'll match Singapore respite options to your hours and budget and draft an enquiry
+          you can send yourself. I never contact anyone for you.
+        </p>
+
+        <!-- one scroll region: the conversation, then the draft enquiry -->
+        <div class="chat-scroll" id="chatScroll">
+          <div class="transcript" id="transcript" aria-live="polite"></div>
+          <div id="draftMount"></div>
+        </div>
+
+        <form class="composer" id="composer">
+          <textarea
+            id="input"
+            rows="1"
+            placeholder="e.g. My mother has Alzheimer's and gets agitated in the afternoons. I need weekday daytime cover near Toa Payoh, up to $85 a session."
+          ></textarea>
+          <button type="submit" id="send">Match</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- ---------- results: cards | map -------------------------------- -->
+    <section class="results">
+      <div class="cards-col">
+        <div class="cards-head">
+          <h2 id="cardsTitle">Your matches will appear here</h2>
+          <span class="count" id="cardsCount"></span>
+        </div>
+        <p class="cards-note" id="cardsNote">
+          Start a conversation above. The top options are ranked best-fit first — the same
+          order as the numbered pins on the map.
+        </p>
+
+        <div class="card-grid" id="cardGrid"></div>
+      </div>
+
+      <div class="map-col">
+        <div class="map-sticky">
+          <div class="map-empty" id="mapEmpty">🗺️<br />Loading the map…</div>
+          <div id="map" hidden></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/app.js?v=15"></script>
+</body>
+</html>

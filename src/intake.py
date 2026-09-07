@@ -29,9 +29,17 @@ _INTAKE_SYSTEM = (
     "guess a budget, an area, or a diagnosis that isn't there — leave the "
     "field null instead.\n"
     "- `needs_description` should read like the caregiver describing the care "
-    "recipient, in their words, focused on the care need rather than logistics.\n"
+    "recipient, in their words, focused on the care need rather than logistics. "
+    "Carry it forward across turns — a short follow-up ('what about $70', 'the "
+    "first one', 'draft it') refines the SAME need, it does not replace it.\n"
     "- Only set `clarifying_question` when a recommendation would be unreliable "
-    "without the missing fact; otherwise leave it null."
+    "without the missing fact; otherwise leave it null.\n"
+    "- `wants_draft` / `selected_option`: look at the caregiver's LAST message "
+    "only. If the assistant's previous turn listed services (numbered), and the "
+    "caregiver's last message points at one of them, set `selected_option` to "
+    "that service's exact name from the list (resolve 'the first one' / 'option "
+    "2' to the name). If the last message asks to draft/write/send an enquiry, "
+    "set `wants_draft` true. These can both be set at once."
 )
 
 

@@ -85,10 +85,31 @@ class CaregiverProfile(BaseModel):
             "most useful question to ask next. Otherwise null."
         ),
     )
+    wants_draft: bool = Field(
+        default=False,
+        description=(
+            "True if the caregiver's LATEST message explicitly asks to draft, "
+            "write, prepare, or send an enquiry / email / message to a service "
+            "(e.g. 'draft me the email', 'write to them', 'contact St Luke's'). "
+            "False otherwise — the pipeline drafts on a normal match anyway; "
+            "this flag matters only for the near-miss list."
+        ),
+    )
+    selected_option: str | None = Field(
+        default=None,
+        description=(
+            "If the caregiver's LATEST message picks one specific service the "
+            "assistant just listed — by full or partial name ('St Luke's Teck "
+            "Whye'), or by position ('the first one', 'option 2', 'number 3') — "
+            "the EXACT service name as it appeared in that list. If they picked "
+            "by position, still resolve it to the exact name. Null if they did "
+            "not pick a listed option."
+        ),
+    )
 
 
 # ==========================================================================
-# 2. Match & Rank — the <=3 services we are recommending, in order
+# 2. Match & Rank — the <=4 services we are recommending, in order
 # ==========================================================================
 
 class RankedMatch(BaseModel):
@@ -115,10 +136,10 @@ class RankedMatch(BaseModel):
 
 
 class RankedMatches(BaseModel):
-    """The rerank node's whole output: an ordered shortlist, best first, at most 3."""
+    """The rerank node's whole output: an ordered shortlist, best first, at most 4."""
 
     matches: list[RankedMatch] = Field(
-        description="Between 0 and 3 services, ordered best fit first. Drop any candidate that does not genuinely fit rather than padding to three.",
+        description="Between 0 and 4 services, ordered best fit first. Drop any candidate that does not genuinely fit rather than padding to four.",
     )
 
 
@@ -162,6 +183,10 @@ class RespiteState(TypedDict, total=False):
                           [{"role": "user"|"assistant"|"system", "content": str}].
       caregiver_profile — CaregiverProfile once Intake has run, else absent/None.
       candidate_matches — the ordered RankedMatch shortlist from Match & Rank.
+      fallback_matches  — set by Match & Rank ONLY when candidate_matches is
+                          empty: the 4 next-best services (budget > schedule >
+                          location priority, hard filters ignored), shown with
+                          a caveat and no draft.
       drafted_message   — DraftedMessage from Explain & Draft, else None.
       consent_given     — HITL gate: the caregiver has seen the draft and
                           approved showing/using it. Nothing auto-sends regardless.
@@ -177,6 +202,7 @@ class RespiteState(TypedDict, total=False):
     messages: list[dict[str, str]]
     caregiver_profile: CaregiverProfile | None
     candidate_matches: list[RankedMatch]
+    fallback_matches: list[RankedMatch]
     drafted_message: DraftedMessage | None
     consent_given: bool
     iteration_count: int
@@ -184,11 +210,12 @@ class RespiteState(TypedDict, total=False):
     final_response: str | None
 
 
-# The four ways a graph run can terminate. `matches_ready` is the success path;
-# the other three are all legitimate, non-error endings the UI renders differently.
+# The ways a graph run can terminate. `matches_ready` is the success path; the
+# rest are all legitimate, non-error endings the UI renders differently.
 Outcome = Literal[
     "matches_ready",         # >=1 grounded match + a draft the caregiver can review
-    "no_matches",            # retrieval + rerank found nothing that fits — suggest loosening constraints
+    "fallback_matches",      # nothing cleared every constraint — the 4 next-best shown with a caveat, no draft
+    "no_matches",            # not reachable while the dataset is non-empty; kept as a defensive end state
     "needs_clarification",   # Intake couldn't proceed without asking the caregiver something
     "stopped_iteration_cap",  # the hard iteration cap tripped before a result was ready
 ]
@@ -203,6 +230,7 @@ def new_state(messages: list[dict[str, str]] | None = None) -> RespiteState:
         messages=list(messages or []),   # copy so the caller's list isn't aliased into state
         caregiver_profile=None,          # set by the Intake node
         candidate_matches=[],            # set by the Match & Rank node
+        fallback_matches=[],             # set by Match & Rank only on the no-match path
         drafted_message=None,            # set by the Explain & Draft node
         consent_given=False,             # HITL gate starts closed
         iteration_count=0,               # bumped by each node that runs

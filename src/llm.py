@@ -208,6 +208,10 @@ def _extract_json_object(text: str) -> Any:
     Best-effort recovery of the JSON object from a model reply. Handles the
     common cases where a model wraps JSON in ```json ... ``` fences or adds a
     sentence before/after. Raises `LLMSchemaError` if nothing parseable is found.
+
+    `strict=False` on the parse: some models (notably Claude 3 Haiku) put real
+    newlines inside a string value — e.g. a multi-line draft `body` — instead of
+    `\\n`. That is harmless content, so tolerate it rather than fail the run.
     """
     candidate = text.strip()  # trim surrounding whitespace/newlines
 
@@ -219,7 +223,7 @@ def _extract_json_object(text: str) -> Any:
     candidate = candidate.strip().strip("`").strip()   # clean up any trailing fence remnants
 
     try:
-        return json.loads(candidate)                    # fast path — the whole reply is valid JSON
+        return json.loads(candidate, strict=False)      # fast path — the whole reply is valid JSON
     except json.JSONDecodeError:
         pass                                            # fall through to the substring heuristic
 
@@ -227,7 +231,7 @@ def _extract_json_object(text: str) -> Any:
     end = candidate.rfind("}")                          # last brace
     if start != -1 and end != -1 and end > start:       # plausible object span
         try:
-            return json.loads(candidate[start : end + 1])  # parse just that span
+            return json.loads(candidate[start : end + 1], strict=False)  # parse just that span
         except json.JSONDecodeError as exc:
             raise LLMSchemaError(f"Model output was not valid JSON: {exc}") from exc
 
@@ -285,6 +289,36 @@ def _generate_groq(
 # Bedrock backend (demo / deploy) — Converse API via boto3
 # --------------------------------------------------------------------------
 
+_bedrock_runtime = None  # cached bedrock-runtime client (see _bedrock_client)
+
+
+def _bedrock_client():
+    """
+    Lazily build and cache the `bedrock-runtime` client.
+
+    `retries.mode="adaptive"` turns on botocore's client-side rate limiter plus
+    a long exponential backoff (up to ~5 min across attempts), so a throttle on
+    a low-quota account slows a call down instead of failing it. `read_timeout`
+    is raised because a Converse call that gets rate-limited server-side can sit
+    for a while before responding.
+    """
+    global _bedrock_runtime
+    if _bedrock_runtime is None:
+        import boto3  # lazy import: only needed on the bedrock path
+        from botocore.config import Config
+
+        _bedrock_runtime = boto3.client(
+            "bedrock-runtime",
+            region_name=settings.aws_region,  # region must match where the model is enabled
+            config=Config(
+                retries={"max_attempts": 10, "mode": "adaptive"},
+                read_timeout=120,
+                connect_timeout=10,
+            ),
+        )
+    return _bedrock_runtime
+
+
 def _generate_bedrock(
     messages: list[dict[str, str]],
     *,
@@ -297,9 +331,12 @@ def _generate_bedrock(
     Call Bedrock's provider-agnostic Converse API. Converse wants system turns
     passed separately from the user/assistant transcript, and each message's
     content wrapped as a list of content blocks — so we translate here.
-    """
-    import boto3  # lazy import: only needed on the bedrock path
 
+    Restricted / hackathon accounts often have a tiny Claude requests-per-minute
+    quota, so the client uses botocore's "adaptive" retry mode (client-side rate
+    limiting + long exponential backoff): a throttle makes a call slow, not
+    fatal. See `_bedrock_client()`.
+    """
     system_blocks, turns = _split_for_converse(messages)  # (system=[{"text":...}], messages=[{"role","content":[...]}])
 
     inference_config: dict[str, Any] = {                  # Converse's knobs live in one nested dict
@@ -314,8 +351,7 @@ def _generate_bedrock(
         system_blocks = [*system_blocks, {"text": "Respond with only a single valid JSON object."}]
 
     try:
-        client = boto3.client("bedrock-runtime", region_name=settings.aws_region)  # region must match the model's
-        resp = client.converse(
+        resp = _bedrock_client().converse(
             modelId=model,
             messages=turns,
             system=system_blocks or [{"text": "You are a helpful assistant."}],  # Converse rejects an empty system list on some models

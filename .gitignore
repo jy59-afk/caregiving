@@ -38,3 +38,16 @@ Thumbs.db
 
 # Node (only if a JS chat UI is added later)
 node_modules/
+
+# Working notes / planning docs — kept locally, not part of the public repo.
+# CLAUDE.md is the AI-assisted-dev build log; docs/ is planning docs, the
+# eval log, the pitch deck, and the hackathon organiser's own slide PDFs.
+# None of it is needed to run the product. Delete a line below if you do
+# want that content public.
+CLAUDE.md
+docs/
+
+# Superseded interface — the graded/demo product is the FastAPI + web/
+# front-end (src/api.py). src/app.py was the earlier Streamlit chat UI and
+# is no longer part of the product; kept on disk for reference only.
+src/app.py

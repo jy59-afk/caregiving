@@ -7,6 +7,11 @@
 #
 # requirements-lock.txt is the exact, tested freeze from a working venv —
 # use it if a fresh resolve of the ranges below misbehaves.
+#
+# The graded/demo build runs entirely on LLM_BACKEND=bedrock +
+# EMBEDDING_BACKEND=bedrock (see README §1.3) — packages below are marked
+# accordingly. Groq + local embeddings still work (see .env.example) for
+# free local dev iteration, but aren't required to run the product.
 
 # --- Orchestration -----------------------------------------------------------
 langgraph>=1.2,<2                # state-graph orchestrator (Intake -> Match -> Explain/Draft -> HITL -> Output)
@@ -14,19 +19,21 @@ langchain>=1.4,<2               # shared primitives
 langchain-community>=0.4,<0.5   # FAISS vector store wrapper (package is being sunset; see CLAUDE.md migration note)
 
 # --- Retrieval (RAG layer) -------------------------------------------------
-faiss-cpu>=1.9                   # in-process vector index, no infra
-sentence-transformers>=3.0       # local/free embedding model for dev (all-MiniLM-L6-v2)
+faiss-cpu>=1.9                   # REQUIRED regardless of LLM/embedding backend — this is the vector index itself, not an LLM
+sentence-transformers>=3.0       # optional — only used if EMBEDDING_BACKEND=local (dev iteration); not needed for the Bedrock build
 
 # --- Model access --------------------------------------------------------
-groq>=0.11                       # cheap/fast provider for dev iteration
-boto3>=1.35                      # AWS SDK — Bedrock Converse API + Titan embeddings for the demo build
+groq>=0.11                       # optional — only used if LLM_BACKEND=groq (dev iteration); not needed for the Bedrock build
+boto3>=1.35                      # REQUIRED for the Bedrock build — AWS SDK for the Converse API + Bedrock embeddings
 
 # --- Validation & config ----------------------------------------------
 pydantic>=2.7,<3                 # every model output is validated against a schema before use
 python-dotenv>=1.0               # loads .env for local dev
 
 # --- Interface -------------------------------------------------------
-streamlit>=1.37                 # thin chat UI for the demo
+fastapi>=0.110                  # HTTP API behind the web frontend (src/api.py)
+uvicorn[standard]>=0.27         # ASGI server for src/api.py
+httpx>=0.27                     # FastAPI TestClient dependency (tests/test_api.py)
 
 # --- Dev / test ----------------------------------------------------
 pytest>=8.2                      # unit tests + the recall@3 retrieval eval

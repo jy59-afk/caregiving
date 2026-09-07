@@ -10,13 +10,38 @@ for the old JSON filter doesn't require changing the orchestration graph —
 only the tool's internals change.
 """
 
+import json  # to read the index sidecar written by ingest.build_index
 from pathlib import Path  # for a working-directory-independent path to the persisted index
 
 from langchain_community.vectorstores import FAISS  # same vector store class used to build the index
 
-from ingest import DEFAULT_INDEX_PATH, get_embeddings  # reuse the exact embedding backend + index location used at ingestion time — a mismatch here silently degrades results
+from ingest import (  # reuse the exact embedding backend + index location used at ingestion time
+    DEFAULT_INDEX_PATH,
+    INDEX_META_NAME,
+    _current_embedding_id,
+    get_embeddings,
+)
 
 _store: FAISS | None = None  # module-level cache; the index is loaded once on first use, not at import time
+
+
+def _check_index_matches_config(index_path: Path) -> None:
+    """
+    Refuse a stale index up front. If `EMBEDDING_BACKEND` (or the Bedrock embed
+    model) was changed without re-running `python src/ingest.py`, the persisted
+    vectors have the wrong dimension and FAISS crashes deep in a C call on the
+    first query. Compare the sidecar `meta.json` to the current config instead.
+    """
+    meta_file = index_path / INDEX_META_NAME
+    if not meta_file.exists():
+        return  # index built before sidecars existed — nothing to check, let it load
+    want = _current_embedding_id()
+    have = json.loads(meta_file.read_text(encoding="utf-8")).get("embedding_id")
+    if have and have != want:
+        raise RuntimeError(
+            f"The vector index was built with embeddings '{have}' but the current "
+            f"config wants '{want}'. Rebuild it:  python src/ingest.py"
+        )
 
 
 def _get_store(index_path: Path | str = DEFAULT_INDEX_PATH) -> FAISS:
@@ -29,6 +54,8 @@ def _get_store(index_path: Path | str = DEFAULT_INDEX_PATH) -> FAISS:
     """
     global _store  # we mutate the module-level cache
     if _store is None:  # first call — build the cache
+        index_path = Path(index_path)
+        _check_index_matches_config(index_path)  # clear error on a stale index, not a C-level crash
         embeddings = get_embeddings()  # embedding model init is the expensive step, so do it at most once per process
         _store = FAISS.load_local(
             str(index_path),
@@ -63,6 +90,14 @@ def search_services(profile: dict, k: int = 8) -> list[dict]:
     """
     Hybrid retrieval entry point called by the agent's Match & Rank node.
 
+    `k` is how many results to RETURN (top-4 by similarity after filtering).
+    Retrieval itself pulls a much wider net — near the whole corpus — so the
+    budget/area hard filters have every record to work with. Without that, an
+    area filter like "Bedok" silently empties the shortlist whenever the Bedok
+    records don't happen to land in the semantic top-k (common now the index is
+    ~80% look-alike nursing-home passages). A large-corpus build would push the
+    metadata filter into the index instead of over-fetching like this.
+
     profile is expected to include:
       - needs_description: str  (the free-text need extracted from the conversation)
       - budget: float | None
@@ -71,11 +106,12 @@ def search_services(profile: dict, k: int = 8) -> list[dict]:
     query = profile["needs_description"]                          # what the caregiver actually said about the care recipient's needs
 
     store = _get_store()                                          # load (once) the persisted vector index
-    candidates = store.similarity_search_with_score(query, k=k)   # cast a wider net semantically first (k=8), filter down after
+    net = max(k * 8, 200)                                         # over-fetch: with ~76 records this is effectively "rank the whole corpus"
+    candidates = store.similarity_search_with_score(query, k=net)
 
-    filtered = _hard_filter(candidates, profile)                  # enforce budget/area as hard constraints
+    filtered = _hard_filter(candidates, profile)                  # enforce budget/area as hard constraints against the FULL ranked list
 
-    top3 = sorted(filtered, key=lambda pair: pair[1])[:3]          # keep the 3 closest semantic matches that also passed the hard filter
+    top4 = sorted(filtered, key=lambda pair: pair[1])[:4]          # keep the 4 closest semantic matches that also passed the hard filter
 
     return [
         {
@@ -84,7 +120,7 @@ def search_services(profile: dict, k: int = 8) -> list[dict]:
                                                      # "why this fits" reasoning is grounded in real service content, not invented
             "similarity_score": float(distance),    # kept for logging / evaluation (recall@k, etc.), not shown to the caregiver
         }
-        for doc, distance in top3
+        for doc, distance in top4
     ]
 
 

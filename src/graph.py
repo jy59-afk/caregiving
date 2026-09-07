@@ -104,15 +104,22 @@ def _route_after_intake(state: RespiteState) -> str:
 
 def _route_after_match(state: RespiteState) -> str:
     """
-    After Match & Rank: stop if the cap tripped or if nothing survived
-    retrieval + rerank (Output then suggests loosening budget/area);
-    otherwise draft for the top match.
+    After Match & Rank: stop if the cap tripped. Normally: draft for the top
+    match. On the no-match path we usually go straight to Output with the
+    `fallback_matches` near-best list and NO draft — UNLESS the caregiver
+    explicitly asked for one, or picked a listed option; then we still draft
+    (for their pick, or the closest option), so a follow-up isn't a dead end.
     """
     if guardrails.iteration_cap_reached(state):  # guardrail 1
         log.info("   route: match_rank -> output  (iteration cap)")  # why we short-circuit
         return "output"
-    if not state.get("candidate_matches"):  # empty shortlist — no point drafting
-        log.info("   route: match_rank -> output  (empty shortlist)")  # nothing survived filter + rerank
+    if not state.get("candidate_matches"):  # nothing cleared every constraint
+        profile = state.get("caregiver_profile")
+        asked = profile is not None and (profile.wants_draft or profile.selected_option)
+        if state.get("fallback_matches") and asked:  # they want to act on the near-best list
+            log.info("   route: match_rank -> explain_draft  (no match, but a draft was requested)")
+            return "explain_draft"
+        log.info("   route: match_rank -> output  (no match — fallback list)")
         return "output"
     log.info("   route: match_rank -> explain_draft")  # at least one match to draft for
     return "explain_draft"
@@ -133,10 +140,10 @@ def run_consent_gate(state: RespiteState) -> dict:
     return {"consent_given": bool(state.get("consent_given", False))}  # pass-through, coerced to bool
 
 
-def _format_matches(state: RespiteState) -> str:
-    """Render the ranked shortlist as a short, plain-text list for the caregiver."""
+def _format_matches(matches: list, start: int = 1) -> str:
+    """Render a ranked shortlist as a short, plain-text list for the caregiver."""
     lines: list[str] = []  # one "1. Name — why" line per match
-    for i, match in enumerate(state.get("candidate_matches", []), start=1):  # 1-based for humans
+    for i, match in enumerate(matches, start=start):  # 1-based for humans
         lines.append(f"{i}. {match.name} — {match.why}")  # name + the grounded one-liner
     return "\n".join(lines)
 
@@ -153,6 +160,7 @@ def run_output(state: RespiteState) -> dict:
     """
     profile = state.get("caregiver_profile")  # may be None only if the graph was mis-built
     matches = state.get("candidate_matches", [])  # ranked shortlist, possibly empty
+    fallback = state.get("fallback_matches", [])  # the 4 next-best, set only when `matches` is empty
     draft = state.get("drafted_message")  # DraftedMessage or None
 
     if guardrails.iteration_cap_reached(state):  # guardrail 1 tripped somewhere upstream
@@ -165,18 +173,39 @@ def run_output(state: RespiteState) -> dict:
     elif profile is not None and profile.clarifying_question:  # Intake needs an answer first
         outcome = "needs_clarification"
         response = profile.clarifying_question  # ask exactly what Intake asked for
-    elif not matches:  # retrieval + rerank found nothing that fits
+    elif not matches and fallback:  # nothing cleared every constraint — show the next-best anyway
+        outcome = "fallback_matches"
+        parts = [
+            "Nothing in the directory clears every constraint you gave (care "
+            "need, schedule and hours). Here are the closest options anyway, "
+            "ordered by location first, then budget, then schedule:\n"
+            + _format_matches(fallback)
+        ]
+        if draft is not None:  # the caregiver asked to draft / picked one from this list
+            parts.append(
+                f"\nI've drafted an enquiry to {draft.service_name} — it doesn't fit "
+                f"everything you asked for, so treat it as a first question, not a "
+                f"booking. Review and send it yourself:\n\n"
+                f"Subject: {draft.subject}\n\n{draft.body}"
+            )
+        else:
+            parts.append(
+                "\nI haven't drafted an enquiry — check what each place can actually "
+                "take on before you contact them. Say 'draft an enquiry to <name>' "
+                "if you want a message to one of them."
+            )
+        response = "\n".join(parts)
+    elif not matches:  # dataset empty / profile missing — should not happen in practice
         outcome = "no_matches"
         response = (
-            "I couldn't find a respite service that fits those constraints. "
-            "Widening the budget or the area — or allowing a different type of "
-            "care (day care, in-home, short-stay) — would give me something to match."
+            "I couldn't find any respite service to suggest right now. Please "
+            "try again with a bit more detail about the care need, budget and timing."
         )
     else:  # the success path — at least one grounded match, and a draft to review
         outcome = "matches_ready"
         parts = [
             "Here are the respite options that best fit what you described:",
-            _format_matches(state),
+            _format_matches(matches),
         ]
         if draft is not None:  # Explain & Draft ran and produced a message
             parts.append(

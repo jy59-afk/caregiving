@@ -65,7 +65,22 @@ def main() -> int:
         print("FAILED: model returned an empty reply")
         return 1
 
-    print("\nOK - model access is working.")
+    # --- 4. Embedding backend smoke test --------------------------------
+    # The retrieval layer needs a working embedding model too — on Bedrock that
+    # is a separate model-access grant, so surface it here before a demo.
+    print(f"\nEMBEDDING_BACKEND  : {settings.embedding_backend}")
+    if settings.embedding_backend == "bedrock":
+        print(f"bedrock embed model: {settings.bedrock_embed_model}")
+    print("embedding one test string...")
+    try:
+        from ingest import get_embeddings  # imported here so a Groq-only run never touches faiss/torch/boto3
+        vec = get_embeddings().embed_query("weekday dementia day care in Yishun")
+        print(f"embedding OK       : dim={len(vec)}")
+    except Exception as exc:  # AccessDenied / invalid model / missing package — all a demo-blocker
+        print(f"FAILED (embeddings): {exc!r}")
+        return 1
+
+    print("\nOK - model + embedding access is working.")
     return 0
 
 
